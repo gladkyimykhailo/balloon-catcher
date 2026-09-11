@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Не впусти кульку!</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎈</text></svg>" />
+<style>
+  :root {
+    --pink: #ff6b81;
+    --blue: #4dc9f6;
+    --ink: #123a52;
+    --card: rgba(255,255,255,.93);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fd3f4;
+    font-family: Nunito, 'Comic Sans MS', 'Segoe UI', system-ui, sans-serif; color: var(--ink);
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
+
+  .overlay { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10;
+    overflow-y: auto; padding: 12px 0; }
+  /* Меню з двома пікерами високе, тож на низькому екрані картка прокручується
+     сама, а не ховає кнопки «Грати» за краєм. */
+  .card { background: var(--card); border-radius: 28px; padding: 30px 34px; text-align: center;
+    box-shadow: 0 18px 50px rgba(10,50,80,.3); max-width: min(92vw, 520px);
+    max-height: 96vh; overflow-y: auto; }
+  h1 { margin: 0 0 4px; font-size: clamp(28px, 6vw, 44px); }
+  .sub { margin: 0 0 20px; opacity: .7; font-size: 16px; }
+
+  button { font: inherit; font-weight: 800; border: none; cursor: pointer; border-radius: 16px;
+    padding: 14px 20px; color: #fff; background: var(--pink); transition: transform .1s, filter .1s; }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: scale(.96); }
+  button.blue { background: var(--blue); }
+  button.ghost { background: #dfeaf2; color: var(--ink); }
+  .stack { display: grid; gap: 10px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+
+  .divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 12px; opacity: .55; font-size: 13px; }
+  .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: currentColor; }
+
+  input { font: inherit; font-weight: 800; text-align: center; letter-spacing: .3em; text-transform: uppercase;
+    border: 3px solid #cfe0ea; border-radius: 16px; padding: 13px; width: 100%; color: var(--ink); }
+  input:focus { outline: none; border-color: var(--blue); }
+
+  #note { margin-top: 14px; font-size: 15px; font-weight: 700; opacity: .8; }
+  #note.error { color: #d63a51; }
+
+  /* HUD поверх канви */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #hud > * { pointer-events: auto; }
+  .corner { position: fixed; top: 14px; right: 14px; display: flex; gap: 8px; }
+  .corner button { padding: 10px 14px; border-radius: 14px; background: rgba(255,255,255,.85); color: var(--ink); }
+  /* Лівий верхній кут: долоні там не літають, тож бейдж не заважає грі. */
+  #room-badge { position: fixed; left: 14px; top: 62px; background: var(--card); border-radius: 16px;
+    padding: 9px 14px; display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); flex-wrap: wrap; max-width: min(90vw, 340px); font-size: 13px; }
+  #room-code { font-size: 22px; font-weight: 900; letter-spacing: .2em; color: var(--pink); }
+  #room-badge button { padding: 7px 12px; font-size: 13px; background: var(--blue); }
+  #peer-info { font-size: 13px; opacity: .75; width: 100%; }
+
+  /* Вибір скіна: рядок кольорових кружечків просто в меню. */
+  #skins, #gloves { display: flex; gap: 10px; justify-content: center; margin: 4px 0 10px; }
+  .skin { width: 46px; height: 46px; border-radius: 50%; padding: 0; font-size: 20px;
+    border: 4px solid transparent; box-shadow: 0 4px 12px rgba(10,50,80,.2); }
+  .skin[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.08); }
+  #wallet { font-size: 15px; opacity: .8; margin-top: 6px; }
+  #coins { color: #d98a00; }
+  #coins-hud { background: rgba(255,255,255,.85); border-radius: 14px; padding: 10px 14px;
+    font-weight: 900; color: #d98a00; }
+  /* Комірка магазину: кружечок і ціна під ним. */
+  .pick { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .price { font-size: 12px; font-weight: 800; color: #d98a00; min-height: 15px; }
+  .skin.locked { filter: grayscale(.75); opacity: .5; }
+  #skin-name, #glove-name { font-weight: 900; }
+  #skin-ability, #glove-ability { display: block; font-size: 14px; opacity: .75; margin-top: 2px; min-height: 34px; }
+  #skin-ability.warn, #glove-ability.warn { color: #d63a51; opacity: 1; font-weight: 800; }
+
+  /* Аптечка. Внизу зліва: там не літає ні кулька, ні долоні, і великою
+     кнопкою зручно влучити пальцем на планшеті. */
+  /* Панель не ловить мишу — інакше, ведучи руку до відра в кутку, гравець
+     заводив би курсор на неї, і канва переставала б бачити рух. Ловлять лише
+     самі кнопки. */
+  #med, #rage { pointer-events: none; }
+  #btn-med, #btn-rage { pointer-events: auto; }
+  #med { position: fixed; left: 14px; bottom: 14px; display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); }
+  #btn-med { background: #3ec46d; padding: 12px 18px; font-size: 17px; }
+  #btn-med:disabled, #btn-rage:disabled { background: #c3d2db; color: #7d909d; cursor: default; filter: none; transform: none; }
+  #med-left, #rage-left { font-size: 15px; opacity: .75; }
+
+  /* Шал боксерської перчатки — поряд з аптечкою, тим же розміром під палець. */
+  #rage { position: fixed; left: 14px; bottom: 76px; display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); }
+  #btn-rage { background: #ff7a1a; padding: 12px 18px; font-size: 17px; }
+  #btn-rage.on { background: #ff3b30; animation: pulse .5s infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.06); } }
+
+  #tip { position: fixed; left: 50%; transform: translateX(-50%); top: 132px; background: rgba(255,255,255,.9);
+    border-radius: 14px; padding: 9px 18px; font-weight: 700; font-size: 15px; transition: opacity .8s; text-align: center; pointer-events: none; }
+  #tip.fade { opacity: 0; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div id="menu" class="overlay">
+    <div class="card">
+      <h1>🎈 Не впусти кульку!</h1>
+      <p class="sub">Бий долонею знизу, щоб кулька не торкнулась підлоги.<br />
+        Шипи можна відбивати рукою, аптечка (H) повертає серце, а боксерська перчатка
+        вмикає шал (B) — 5 секунд без кулдауну</p>
+      <div id="wallet">Твої монети: <b id="coins">🪙 0</b></div>
+      <div class="divider">магазин · скін кульки</div>
+      <div id="skins"></div>
+      <div id="skin-pick"><span id="skin-name"></span><span id="skin-ability"></span></div>
+      <div class="divider">магазин · перчатка</div>
+      <div id="gloves"></div>
+      <div id="glove-pick"><span id="glove-name"></span><span id="glove-ability"></span></div>
+      <div class="stack">
+        <button id="btn-solo">👋 Грати одному</button>
+        <button id="btn-local2" class="blue">👋👋 Вдвох за одним комп'ютером</button>
+      </div>
+      <div class="divider">мультиплеєр — до 4 гравців</div>
+      <div class="stack">
+        <button id="btn-host" class="ghost">Створити кімнату</button>
+        <div class="row">
+          <input id="room-input" maxlength="4" placeholder="КОД" />
+          <button id="btn-join" class="ghost">Приєднатись</button>
+        </div>
+      </div>
+      <div id="note" hidden></div>
+    </div>
+  </div>
+
+  <div id="hud" hidden>
+    <div class="corner">
+      <span id="coins-hud">🪙 0</span>
+      <button id="btn-mute">🔊</button>
+      <button id="btn-menu">Меню</button>
+    </div>
+    <div id="tip"></div>
+    <div id="med">
+      <button id="btn-med">🩹 Аптечка</button>
+      <span id="med-left">5 / 5 на рівень</span>
+    </div>
+    <div id="rage" hidden>
+      <button id="btn-rage">🥊 Шал</button>
+      <span id="rage-left">2 / 2 на рівень</span>
+    </div>
+    <div id="room-badge" hidden>
+      <span>Код кімнати</span>
+      <span id="room-code">····</span>
+      <button id="btn-copy">Копіювати посилання</button>
+      <span id="peer-info"></span>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay" hidden>
+    <div class="card">
+      <h1>Кулька впала 😢</h1>
+      <p class="sub">Рівень <b id="final-level">1</b> · Рахунок: <b id="final-score">0</b> · Рекорд: <b id="best-score">0</b><br />
+        Зароблено 🪙 <b id="earned">0</b> — витрать їх у магазині на нові кульки й перчатки</p>
+      <div class="stack">
+        <button id="btn-again">Ще раз (Пробіл)</button>
+        <button id="btn-menu2" class="ghost" onclick="document.getElementById('btn-menu').click()">У меню</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/client/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "baloon-tapper",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Дитяча гра: не дай повітряній кульці впасти на підлогу. PixiJS + м'яка фізика + мультиплеєр.",
+  "scripts": {
+    "dev": "vite",
+    "server": "node server/index.js",
+    "build": "vite build",
+    "start": "npm run build && node server/index.js",
+    "preview": "vite preview",
+    "share": "npm run build && node scripts/share.js"
+  },
+  "dependencies": {
+    "pixi.js": "^8.20.1",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

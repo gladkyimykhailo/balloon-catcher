@@ -1,0 +1,13 @@
+# Готовий опис сервісу для Render. Досить під'єднати репозиторій —
+# решту Render візьме звідси.
+services:
+  - type: web
+    name: baloon-tapper
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: node server/index.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
