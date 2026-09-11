@@ -6,7 +6,7 @@
 //      стискаєш кульку -> площа падає -> тиск росте -> вона випинається деінде.
 // Саме тому вона мнеться від долоні, а потім пружно вистрілює назад.
 
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, SKUNK, hogReachY, skinAt, gloveAt, handKit, biomeAt, ladderAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, SHELL, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, SKUNK, hogReachY, skinAt, gloveAt, handKit, biomeAt, ladderAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
 
 const TAU = Math.PI * 2;
 
@@ -167,6 +167,8 @@ export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
     out: false,       // серця скінчились — гравець вибув, решта грає далі
     web: 0,           // скільки секунд ще тримає павутина
     shield: 0,        // заряд щита: одна пастка мине
+    shell: 0,         // заряд панцира броненосця: стільки падінь ще пробачить спина
+    shellSpent: false, // чи витрачено панцир на цьому рівні — див. `applyKit`
     // Рукавичка від скунсового газу. `glove` вище — це скін перчатки, тож
     // захист живе в окремих полях, щоб їх не плутати.
     gloveOn: 0,       // скільки секунд ще захищає вдягнена рукавичка
@@ -248,6 +250,12 @@ function applyKit(w, h) {
   const kit = kitOf(w, h);
   h.r = HAND.r * kit.sizeMul;
   if (!kit.rage) h.rage = 0;         // не боксерська — шал гасне
+  // Панцир при зміні персонажа поводиться просто: НЕ витрачений на цьому рівні
+  // стає таким, який дає новий звір (інакше вибір броненосця в меню кімнати —
+  // а його роблять уже після приєднання — не давав би панцира до другого
+  // рівня), а витрачений лишається витраченим: повернути його, двічі
+  // перемкнувши звіра, не можна.
+  h.shell = h.shellSpent ? Math.min(h.shell ?? 0, kit.shellSaves) : kit.shellSaves;
   return kit;
 }
 
@@ -508,7 +516,7 @@ function onLevelUp(w, lvl) {
   const before = rung(w);
   w.level = lvl;
   w.medkits = medkitsFor(w);
-  for (const h of w.hands) { h.rages = RAGE.perLevel; h.gloves = SKUNK.glovePerLevel; }
+  for (const h of w.hands) { h.rages = RAGE.perLevel; h.gloves = SKUNK.glovePerLevel; refillShell(w, h); }
   rollSpikes(w);
   greetNewHazards(w, before);
 }
@@ -1628,10 +1636,54 @@ function checkFloor(w) {
     if (pts[i].y > maxY) { maxY = pts[i].y; mx = pts[i].x; }
   }
   if (maxY < FLOOR_Y) return;
+  if (shellSave(w, mx, maxY)) return;
 
   w.events.push({ type: 'drop', x: mx, y: FLOOR_Y, player: -1 });
   if (w.team) teamLose(w, mx);
   else loseLives(w, 1);
+}
+
+/** Свіжий панцир на новий рівень — як свіжі аптечки й шал. */
+function refillShell(w, h) {
+  h.shell = kitOf(w, h).shellSaves;
+  h.shellSpent = false;
+}
+
+/**
+ * Спина броненосця. Кулька вже торкнулась підлоги — але якщо серед живих є
+ * броненосець із цілим панциром, вона відскакує від нього замість падіння.
+ *
+ * Рятує НАЙБЛИЖЧИЙ до місця падіння — як і винен у тім-апі найближчий: це той
+ * самий здоровий глузд, тільки з іншого боку. Відстань при цьому нічого не
+ * забороняє: броненосець котиться клубком, і підставити спину з іншого краю
+ * екрана для нього — питання того самого моменту.
+ *
+ * Відскок — жорсткий: усім точкам ставимо одну швидкість угору, а не додаємо
+ * імпульс у місці дотику. Панцир на те й панцир, що не мнеться, і кулька йде
+ * від нього рівно вгору, а не закручується, як від ляпаса.
+ */
+function shellSave(w, x, maxY) {
+  let who = null;
+  let best = Infinity;
+  for (const h of w.hands) {
+    if (!h.active || h.out || h.shell <= 0) continue;
+    const d = Math.abs(h.x - x);
+    if (d < best) { best = d; who = h; }
+  }
+  if (!who) return false;
+
+  who.shell--;
+  who.shellSpent = true;
+  // Піднімаємо рівно на те, на скільки кулька провалилась, плюс невеликий
+  // зазор: інакше наступний кадр знову побачив би її нижче підлоги й падіння
+  // зарахувалось би вдруге — уже без панцира.
+  const up = (maxY - FLOOR_Y) + SHELL.lift;
+  for (const p of w.balloon.pts) {
+    p.y -= up;
+    p.vy = -SHELL.bounce;
+  }
+  w.events.push({ type: 'shell', x, y: FLOOR_Y, player: who.player, level: who.shell });
+  return true;
 }
 
 /**
@@ -1704,6 +1756,7 @@ export function restart(w) {
   for (const h of w.hands) {
     h.touching = false; h.slow = 0; h.rage = 0; h.rages = RAGE.perLevel; h.dirty = false;
     h.web = 0; h.shield = 0; h.out = false; h.lives = teamLives(h);
+    refillShell(w, h);
     h.gloveOn = 0; h.gloves = SKUNK.glovePerLevel; h.gasT = 0;
   }
 }

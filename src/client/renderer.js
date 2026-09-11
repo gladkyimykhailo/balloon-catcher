@@ -403,6 +403,17 @@ export class Renderer {
       } else if (h.shieldRing) {
         h.shieldRing.visible = false;
       }
+      // Цілий панцир — тепла дуга ЗНИЗУ, а не кільце: рятує саме спина, і
+      // видно має бути те місце, від якого кулька відскочить.
+      if (hd.shell > 0) {
+        if (!h.shellArc) { h.shellArc = new Graphics(); h.view.addChildAt(h.shellArc, 0); }
+        h.shellArc.clear();
+        h.shellArc.arc(0, 0, 74, 0.15 * Math.PI, 0.85 * Math.PI)
+          .stroke({ width: 7, color: 0xe0b070, alpha: 0.85 });
+        h.shellArc.visible = true;
+      } else if (h.shellArc) {
+        h.shellArc.visible = false;
+      }
       // Павутина: липкі нитки просто поверх персонажа — видно, що він застряг
       // і що до нього треба бігти.
       if (hd.web > 0) {
@@ -987,6 +998,22 @@ function makeCharGraphic(color, isSelf, charIndex = 0) {
     g.circle(-16, -3, 3).circle(18, -3, 3).fill(0x1d1d22);
     for (let i = 0; i < 3; i++) {
       g.circle(-46 - i * 9, -44 - i * 11, 10 - i * 2).fill({ color: 0x9ad36b, alpha: 0.4 - i * 0.1 });
+    }
+  } else if (ch.id === 'armadillo') {
+    // Броненосця впізнають по смугах панцира, тож вони тут головні: поперек
+    // усієї спини, з розхилом до країв. Морда й лапи навмисно стирчать з-під
+    // панцира — без них силует читався б як камінь, а камінь у цій грі ворог.
+    g.ellipse(0, 2, 56, 46).fill(0xa8875c).stroke({ width: 4, color: 0x6b5334 });
+    for (let i = -2; i <= 2; i++) {
+      g.moveTo(i * 18, -42).lineTo(i * 23, 46).stroke({ width: 5, color: 0x6b5334, alpha: 0.9 });
+    }
+    g.ellipse(0, -26, 34, 13).fill({ color: 0xe3c79c, alpha: 0.45 });
+    g.ellipse(-54, 18, 22, 15).fill(0xd8bb92).stroke({ width: 3, color: 0x6b5334 });
+    g.moveTo(-68, 10).lineTo(-80, 15).lineTo(-68, 21).closePath().fill(0xd8bb92);
+    g.circle(-50, 12, 4.5).fill(0x2b2b2b);
+    g.circle(-51, 11, 1.8).fill(0xffffff);
+    for (const fx of [-28, 0, 28]) {
+      g.roundRect(fx - 7, 40, 14, 17, 6).fill(0x6b5334);
     }
   } else if (ch.id === 'rat') {
     // Пацюк — вуха більші за голову: маленького персонажа видно саме по них.

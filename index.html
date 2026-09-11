@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#8fd3f4" />
 <title>Не впусти кульку!</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎈</text></svg>" />
 <style>
@@ -13,7 +17,7 @@
     --card: rgba(255,255,255,.93);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fd3f4;
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #8fd3f4;
     font-family: Nunito, 'Comic Sans MS', 'Segoe UI', system-ui, sans-serif; color: var(--ink);
     -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   #stage { position: fixed; inset: 0; }
@@ -26,6 +30,12 @@
   .card { background: var(--card); border-radius: 28px; padding: 30px 34px; text-align: center;
     box-shadow: 0 18px 50px rgba(10,50,80,.3); max-width: min(92vw, 520px);
     max-height: 96vh; overflow-y: auto; }
+  /* Статична збірка (GitHub Pages) їде без сервера кімнат: онлайн-кнопки
+     там нікуди не ведуть, тож клас no-online прибирає їх з меню. */
+  body.no-online #mp-block,
+  body.no-online #btn-hc-host,
+  body.no-online #btn-team-host { display: none; }
+
   h1 { margin: 0 0 4px; font-size: clamp(28px, 6vw, 44px); }
   .sub { margin: 0 0 20px; opacity: .7; font-size: 16px; }
 
@@ -42,9 +52,18 @@
   .divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 12px; opacity: .55; font-size: 13px; }
   .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: currentColor; }
 
+  /* Поле коду кімнати. Три дрібниці, без яких у нього неможливо було писати:
+     body забороняє виділення тексту, і iOS через це не дає ставити курсор в
+     інпут; без явного фону й color-scheme темна тема браузера малювала темний
+     текст на темному полі — здавалось, що літери не з'являються зовсім; а
+     -webkit-text-fill-color тримає колір там, де Safari підмінює його своїм. */
   input { font: inherit; font-weight: 800; text-align: center; letter-spacing: .3em; text-transform: uppercase;
-    border: 3px solid #cfe0ea; border-radius: 16px; padding: 13px; width: 100%; color: var(--ink); }
+    border: 3px solid #cfe0ea; border-radius: 16px; padding: 13px; width: 100%;
+    color: var(--ink); -webkit-text-fill-color: var(--ink); background: #fff;
+    caret-color: var(--pink); color-scheme: light;
+    -webkit-user-select: text; user-select: text; }
   input:focus { outline: none; border-color: var(--blue); }
+  input::placeholder { color: #9fb6c4; -webkit-text-fill-color: #9fb6c4; opacity: 1; }
 
   #note { margin-top: 14px; font-size: 15px; font-weight: 700; opacity: .8; }
   #note.error { color: #d63a51; }
@@ -201,12 +220,15 @@
         </div>
       </div>
 
-      <div class="divider">мультиплеєр — до 4 гравців</div>
-      <div class="stack">
-        <button id="btn-host" class="ghost">Створити кімнату</button>
-        <div class="row">
-          <input id="room-input" maxlength="4" placeholder="КОД" />
-          <button id="btn-join" class="ghost">Приєднатись</button>
+      <div id="mp-block">
+        <div class="divider">мультиплеєр — до 4 гравців</div>
+        <div class="stack">
+          <button id="btn-host" class="ghost">Створити кімнату</button>
+          <div class="row">
+            <input id="room-input" type="text" maxlength="4" placeholder="КОД"
+                   autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+            <button id="btn-join" class="ghost">Приєднатись</button>
+          </div>
         </div>
       </div>
       <div id="note" hidden></div>
@@ -218,6 +240,7 @@
       <span id="coins-hud">🪙 0</span>
       <span id="skulls-hud" hidden>☠ 0</span>
       <span id="tokens-hud" hidden>🤝 0</span>
+      <button id="btn-full" hidden>⛶</button>
       <button id="btn-mute">🔊</button>
       <button id="btn-menu">Меню</button>
     </div>

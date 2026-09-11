@@ -10,7 +10,9 @@
     "build": "vite build",
     "start": "npm run build && node server/index.js",
     "preview": "vite preview",
-    "share": "npm run build && node scripts/share.js"
+    "share": "npm run build && node scripts/share.js",
+    "build:pages": "VITE_NO_ONLINE=1 vite build --base=./ --outDir=dist-pages",
+    "deploy:pages": "npm run build:pages && node scripts/pages.js"
   },
   "dependencies": {
     "pixi.js": "^8.20.1",

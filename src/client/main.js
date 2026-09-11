@@ -1,6 +1,6 @@
 import { Renderer } from './renderer.js';
 import { Input } from './input.js';
-import { Net, defaultServerUrl } from './net.js';
+import { Net, defaultServerUrl, setServerUrl } from './net.js';
 import { sfx, setMuted, isMuted } from './sound.js';
 import { createWorld, step, addHand, setHandTarget, restart, levelInfo, advanceHand, useMedkit, anyHandSlowed, setSkin, setGlove, useRage, useGlove, canTap, maxLivesOf } from '../shared/physics.js';
 import { WORLD, RULES, HARDCORE, TEAM, SKUNK, PLAYER_COLORS, PLAYER_COLOR_NAMES, PLAYER_NAMES, MEDKIT, RAGE, COIN, SKINS, GLOVES, CHARACTERS, PERKS, BUFFS, handKit, biomeAt, ladderAt, rulesFor, skullReward, perkMask } from '../shared/constants.js';
@@ -53,6 +53,11 @@ async function boot() {
   $('#room-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btn-join').click(); });
   $('#btn-menu').onclick = () => toMenu();
   $('#btn-again').onclick = () => doRestart();
+  $('#btn-full').onclick = () => (inFullscreen() ? leaveFullscreen() : enterFullscreen());
+  // Вийти можна й повз кнопку (Esc, системний жест) — іконку синхронізує подія.
+  document.addEventListener('fullscreenchange', syncFullBtn);
+  document.addEventListener('webkitfullscreenchange', syncFullBtn);
+  syncFullBtn();
   $('#btn-mute').onclick = () => {
     setMuted(!isMuted());
     $('#btn-mute').textContent = isMuted() ? '🔇' : '🔊';
@@ -89,8 +94,20 @@ async function boot() {
   // Посилання-запрошення виду ?room=ABCD одразу веде в кімнату,
   // а ?mode=solo / ?mode=local2 — одразу в локальну гру.
   const q = new URLSearchParams(location.search);
+
+  // Збірка для статичного хостингу ховає онлайн лише тоді, коли сервера кімнат
+  // справді нема куди питати. Дали адресу при збірці (VITE_WS_URL) або в
+  // посиланні (?ws=wss://…) — кімнати повертаються в меню всіма режимами.
+  let finding = null;
+  if (import.meta.env.VITE_NO_ONLINE && !import.meta.env.VITE_WS_URL && !q.get('ws')) {
+    document.body.classList.add('no-online');
+    finding = findSharedServer();   // меню не чекає: кнопки просто з'являться самі
+  }
   const invite = q.get('room');
   const mode = q.get('mode');
+  // Посилання-запрошення — єдиний випадок, коли адресу треба знати ВЖЕ: воно
+  // з'єднується саме, не даючи кнопкам шансу з'явитись.
+  if (invite) await finding;
   if (invite) { $('#room-input').value = invite.toUpperCase(); startOnline(invite.toUpperCase()); }
   else if (mode === 'solo') startLocal(1);
   else if (mode === 'local2') startLocal(2);
@@ -307,7 +324,51 @@ function ensureOwned() {
 
 // ------------------------------------------------------------------ режими
 
+// ------------------------------------------------------- на весь екран
+
+/**
+ * Світ у грі горизонтальний (1200×800), а телефон у руці вертикальний: у
+ * портреті гра стискається у смужку посеред екрана, бо `layout()` вписує світ
+ * цілком. Тому на дотикових пристроях гра сама проситься на весь екран і
+ * повертає екран у ландшафт.
+ *
+ * І запит екрана, і поворот дозволені лише всередині жесту користувача, тож
+ * гукаємо їх з того самого обробника, що запускає гру, а не при завантаженні.
+ *
+ * На iPhone Fullscreen API немає зовсім (Safari дає його тільки відео), і
+ * кнопка там просто ховається. Повний екран на ньому дає «Поділитись → На
+ * початковий екран» — заради цього в <head> і лежать apple-mobile-web-app-*.
+ */
+const fsEl = () => document.documentElement;
+const canFullscreen = () => !!(fsEl().requestFullscreen || fsEl().webkitRequestFullscreen);
+const inFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
+
+async function enterFullscreen() {
+  if (!canFullscreen() || inFullscreen()) return;
+  try {
+    await (fsEl().requestFullscreen?.({ navigationUI: 'hide' }) ?? fsEl().webkitRequestFullscreen());
+  } catch {
+    return;                                    // браузер відмовив — гра грається й так
+  }
+  try { await screen.orientation?.lock?.('landscape'); } catch { /* дозволено не всюди */ }
+}
+
+async function leaveFullscreen() {
+  try { screen.orientation?.unlock?.(); } catch { /* те саме */ }
+  try { await (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.()); } catch { /* уже вийшли */ }
+}
+
+/** Кнопка показує, що станеться від натискання, а не де ми зараз. */
+function syncFullBtn() {
+  const b = $('#btn-full');
+  b.hidden = !canFullscreen();
+  b.textContent = inFullscreen() ? '⤡' : '⛶';
+  b.title = inFullscreen() ? 'Вийти з повного екрана' : 'На весь екран';
+}
+
 function startLocal(players, kind = 'normal') {
+  if (isTouch()) enterFullscreen();
   setKind(kind);
   game.mode = players === 1 ? 'solo' : 'local2';
   game.world = createWorld(kind);
@@ -327,6 +388,7 @@ function startLocal(players, kind = 'normal') {
 }
 
 async function startOnline(room, kind = 'normal') {
+  if (isTouch()) enterFullscreen();
   setNote("З'єднуємось…", false);
   const net = new Net();
   net.onError = (m) => setNote(m, true);
@@ -370,6 +432,31 @@ async function startOnline(room, kind = 'normal') {
       || 'Ця кімната звичайна', false);
   }
   sfx.start();
+}
+
+/**
+ * Кімнати на статичному сайті. Сам сайт сервера не має, але `npm run share`
+ * піднімає його на комп'ютері господаря і кладе поруч зі сторінкою `ws.json` з
+ * адресою тунелю. Поки той файл свіжий — кімнати в меню вмикаються, і працюють
+ * усі три режими; коли комп'ютер вимкнено, файл або зник, або застарів, і меню
+ * лишається таким, як було.
+ *
+ * Тунель живе годинами, не тижнями, тож старіший за півдоби запис ігноруємо:
+ * краще не показати кімнат, ніж показати кнопку, яка нікуди не з'єднається.
+ */
+const SHARE_TTL = 12 * 3600 * 1000;
+
+async function findSharedServer() {
+  try {
+    const r = await fetch('./ws.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.url || Date.now() - (d.ts ?? 0) > SHARE_TTL) return;
+    setServerUrl(d.url);
+    document.body.classList.remove('no-online');
+  } catch {
+    /* немає файлу чи немає мережі — просто граємо без кімнат */
+  }
 }
 
 /** «Чекаємо…» / «Граєте втрьох» / «Кімната повна» — одним рядком. */
@@ -559,7 +646,7 @@ function frameLocal(dt) {
       // Правило черги рахуємо тут, щоб малювальник просто малював привида,
       // а не переказував правила гри своїми словами.
       lives: h.lives, out: h.out, web: h.web, shield: h.shield,
-      gloveOn: h.gloveOn, gloves: h.gloves,
+      gloveOn: h.gloveOn, gloves: h.gloves, shell: h.shell,
       maxLives: maxLivesOf(w, h),
       locked: w.team && !h.out && h.web <= 0 && !canTap(w, h),
     })),
@@ -713,6 +800,12 @@ function onWorldEvent(e) {
     sfx.spikeWarn();
   } else if (e.type === 'spikeUp') {
     sfx.spikeUp();
+  } else if (e.type === 'shell') {
+    // level у цій події — скільки панцира лишилось на цьому рівні.
+    banner = { text: 'Панцир! Кулька відскочила від спини 🛡', t: 2.0 };
+    renderer.burst(e.x, e.y, 0xe0b070, 1);
+    renderer.shake = 0.7;
+    sfx.shell();
   } else if (e.type === 'parry') {
     banner = { text: 'Шип відбито! 🖐', t: 1.4 };
     renderer.burst(e.x, e.y, 0xfff0a5, 0.8);

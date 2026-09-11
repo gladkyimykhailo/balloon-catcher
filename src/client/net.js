@@ -158,7 +158,7 @@ export class Net {
         // і клієнту не треба знати, хто ще може бити.
         lives: hb[10] ?? 0, out: hb[11] === 1, web: hb[12] ?? 0,
         shield: hb[13] ?? 0, locked: hb[14] === 1, maxLives: hb[15] ?? 3,
-        gloveOn: hb[16] ?? 0, gloves: hb[17] ?? 0,
+        gloveOn: hb[16] ?? 0, gloves: hb[17] ?? 0, shell: hb[18] ?? 0,
       };
     });
 
@@ -245,9 +245,22 @@ export class Net {
   }
 }
 
+/**
+ * Адреса, знайдена вже під час роботи (див. `findSharedServer` у main.js):
+ * статичний сайт не має власного сервера, але `npm run share` лишає поруч зі
+ * сторінкою файл ws.json з адресою тунелю. Вона живіша за вбудовану, тож б'є її.
+ */
+let shared = null;
+export function setServerUrl(url) { shared = url; }
+
 export function defaultServerUrl() {
   const q = new URLSearchParams(location.search).get('ws');
   if (q) return q;
+  if (shared) return shared;
+  // Статична збірка (GitHub Pages) сама нічого не слухає, тож адресу сервера
+  // кімнат вона отримує при збірці: VITE_WS_URL=wss://… npm run deploy:pages.
+  // Без неї онлайн у такій збірці взагалі не показується (клас `no-online`).
+  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   // У режимі `vite dev` сторінка на 5173, а сервер гри — на 8090.
   if (import.meta.env.DEV) return `${proto}//${location.hostname}:8090`;

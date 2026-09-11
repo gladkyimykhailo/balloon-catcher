@@ -56,12 +56,20 @@ export class Input {
     el.addEventListener('pointercancel', drop);
     el.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'mouse') drop(e); });
 
+    // Слухач живе весь час, і в меню теж — тож поки гравець пише в полі коду
+    // кімнати, клавіші належать полю, а не долоні.
+    const typing = (e) => {
+      const t = e.target;
+      return t instanceof HTMLElement &&
+        (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+    };
+
     window.addEventListener('keydown', (e) => {
-      if (e.repeat) return;
+      if (e.repeat || typing(e)) return;
       this.keys.add(e.code);
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keyup', (e) => { if (!typing(e)) this.keys.delete(e.code); });
     window.addEventListener('blur', () => { this.keys.clear(); this.pointers.clear(); });
   }
 

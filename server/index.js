@@ -122,6 +122,7 @@ function snapshot(room) {
       // Правило черги рахує сервер: клієнт отримує готове «можеш / не можеш».
       h.lives, h.out ? 1 : 0, +h.web.toFixed(2), h.shield, w.team && !canTap(w, h) && !h.out && h.web <= 0 ? 1 : 0,
       maxLivesOf(w, h), +h.gloveOn.toFixed(2), h.gloves,
+      h.shell,
     ]),
     g: w.gull ? [Math.round(w.gull.x), Math.round(w.gull.y), w.gull.dir, +w.gull.flap.toFixed(2)] : null,
     df: +w.deflate.toFixed(2),

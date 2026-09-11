@@ -52,6 +52,12 @@ export const sfx = {
     blip({ freq: 1200, to: 2400, dur: 0.08, type: 'square', gain: 0.14 });
     setTimeout(() => blip({ freq: 2000, to: 900, dur: 0.22, type: 'triangle', gain: 0.1 }), 60);
   },
+  // Панцир: глухий удар об тверде, а слідом висхідний відскок — саме в такому
+  // порядку, бо спершу кулька б'ється об спину, а вже потім летить угору.
+  shell() {
+    blip({ freq: 320, to: 120, dur: 0.12, type: 'square', gain: 0.18 });
+    setTimeout(() => blip({ freq: 400, to: 1400, dur: 0.26, type: 'triangle', gain: 0.13 }), 80);
+  },
   // Аптечка — м'яке висхідне «плюс серце».
   heal() {
     [660, 880].forEach((f, i) => setTimeout(() => blip({ freq: f, to: f * 1.5, dur: 0.2, type: 'sine', gain: 0.15 }), i * 110));
