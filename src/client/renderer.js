@@ -1,5 +1,5 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, bucketSpots } from '../shared/constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, bucketSpots } from '../shared/constants.js';
 
 const BAR_W = 360;
 const BAR_H = 24;
@@ -37,6 +37,9 @@ export class Renderer {
     this.gull.visible = false;
     this.spikesG = new Graphics();
     this.stonesG = new Graphics();
+    // Пастки — під кулькою і під руками: у смолі кулька має грузнути, тобто
+    // бути ВСЕРЕДИНІ хмари, а не перед нею.
+    this.trapsG = new Graphics();
     this.poopsG = new Graphics();
     this.shadowG = new Graphics();
     this.handLayer = new Container();
@@ -44,7 +47,7 @@ export class Renderer {
     this.hud = new Container();
     // Камінці — над кулькою: вони падають на неї згори, і ховати їх за
     // оболонкою означало б втратити саме той кадр, у якому ще можна відвести.
-    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.gull, this.handLayer, this.fx, this.hud);
+    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.gull, this.handLayer, this.fx, this.hud);
 
     // Відблиск малюємо один раз в одиничних координатах і далі лише
     // масштабуємо/повертаємо — так він виглядає як нахилений полиск, а не як цифра.
@@ -212,11 +215,49 @@ export class Renderer {
     this.hearts = new Container();
     this.hearts.position.set(24, 22);
 
+    // Тім-ап: серця особисті, тож один ряд їх не вмістить — у кожного свій,
+    // підписаний кольором гравця.
+    this.team = new Container();
+    this.team.position.set(24, 16);
+    this.comboText = new Text({ text: '', style: { ...style, fontSize: 30 } });
+    this.comboText.anchor.set(0.5, 0);
+    this.comboText.position.set(WORLD.w / 2, 108);
+
     this.msg = new Text({ text: '', style: { ...style, fontSize: 44, align: 'center' } });
     this.msg.anchor.set(0.5);
     this.msg.position.set(WORLD.w / 2, WORLD.h / 2 - 40);
 
-    this.hud.addChild(this.scoreText, this.levelBar, this.hearts, this.msg);
+    this.hud.addChild(this.scoreText, this.levelBar, this.hearts, this.team, this.comboText, this.msg);
+  }
+
+  /**
+   * Рядок серць на кожного гравця. Перемальовуємо лише коли щось змінилось:
+   * інакше це десяток нових Graphics щокадру заради нерухомої картинки.
+   */
+  setTeamHearts(hands, max) {
+    const key = hands.map((h) => h.player + ':' + h.lives + '/' + (h.maxLives ?? max) + (h.out ? 'x' : '')).join('|');
+    if (key === this._teamKey) return;
+    this._teamKey = key;
+    this.team.removeChildren();
+    const sorted = [...hands].sort((a, b) => a.player - b.player);
+    sorted.forEach((h, row) => {
+      const line = new Container();
+      line.y = row * 34;
+      const dot = new Graphics();
+      dot.circle(9, 9, 9).fill(PLAYER_COLORS[h.player % PLAYER_COLORS.length])
+        .stroke({ width: 3, color: 0x1b4b6b, alpha: 0.6 });
+      line.addChild(dot);
+      for (let i = 0; i < (h.maxLives ?? max ?? 3); i++) {
+        const g = new Graphics();
+        heartPath(g, 0, 0, 12);
+        g.fill(h.out ? 0x2b4a5e : i < h.lives ? 0xff4d6d : 0x2b4a5e);
+        g.alpha = h.out ? 0.25 : i < h.lives ? 1 : 0.35;
+        g.position.set(34 + i * 30, 10);
+        line.addChild(g);
+      }
+      line.alpha = h.out ? 0.45 : 1;
+      this.team.addChild(line);
+    });
   }
 
   setHearts(n, max) {
@@ -278,10 +319,13 @@ export class Renderer {
     this.drawGull(view.gull);
     this.drawSpikes(view.spikes, dt);
     this.drawStones(view.stones, dt);
+    this.drawTraps(view.traps, dt);
     this.drawPoops(view.poops);
 
     const alive = new Set();
     for (const hd of view.hands) {
+      // Вибулий гравець зникає з поля: його руки в грі більше немає.
+      if (hd.out) continue;
       alive.add(hd.id);
       const h = this.ensureHand(hd.id, hd.player, hd.self, hd.glove ?? 0, hd.char ?? 0, !!view.hardcore);
       if (h.lx === null) { h.lx = hd.x; h.ly = hd.y; h.view.position.set(hd.x, hd.y); }
@@ -309,6 +353,51 @@ export class Renderer {
       h.view.scale.set(s, s * (1 - h.pop * 0.12));
       // Поки долоня обважніла після удару, вона бліда — видно, чому не встигає.
       h.view.alpha = hd.slow > 0 ? 0.6 : 1;
+      // Тім-ап: той, хто щойно тапнув, безтілесний, поки не зачепить хтось
+      // інший, — і має виглядати саме так, привидом. Це головна підказка
+      // режиму: видно, чия зараз черга.
+      if (hd.locked) {
+        h.view.alpha = 0.32;
+        if (!h.lockRing) { h.lockRing = new Graphics(); h.view.addChildAt(h.lockRing, 0); }
+        h.lockRing.clear();
+        // Пунктир темний, а не білий: небо світле, і біле кільце на ньому
+        // просто губилось — на скріншоті його було ледве видно.
+        for (let i = 0; i < 10; i++) {
+          const a0 = (i / 10) * Math.PI * 2;
+          const a1 = a0 + 0.34;
+          h.lockRing.moveTo(Math.cos(a0) * 76, Math.sin(a0) * 76)
+            .lineTo(Math.cos(a1) * 76, Math.sin(a1) * 76)
+            .stroke({ width: 7, color: 0x1b4b6b, alpha: 0.85 });
+        }
+        h.lockRing.visible = true;
+      } else if (h.lockRing) {
+        h.lockRing.visible = false;
+      }
+      // Щит — рівне блакитне кільце, щоб не плутати з пульсуючим шалом.
+      if (hd.shield > 0) {
+        if (!h.shieldRing) { h.shieldRing = new Graphics(); h.view.addChildAt(h.shieldRing, 0); }
+        h.shieldRing.clear();
+        h.shieldRing.circle(0, 0, 80).fill({ color: 0x7fd8ff, alpha: 0.14 })
+          .stroke({ width: 5, color: 0x7fd8ff, alpha: 0.8 });
+        h.shieldRing.visible = true;
+      } else if (h.shieldRing) {
+        h.shieldRing.visible = false;
+      }
+      // Павутина: липкі нитки просто поверх персонажа — видно, що він застряг
+      // і що до нього треба бігти.
+      if (hd.web > 0) {
+        if (!h.webG) { h.webG = new Graphics(); h.view.addChild(h.webG); }
+        h.webG.clear();
+        for (let i = 0; i < 7; i++) {
+          const a = (i / 7) * Math.PI * 2;
+          h.webG.moveTo(Math.cos(a) * 82, Math.sin(a) * 82).lineTo(-Math.cos(a) * 24, -Math.sin(a) * 24)
+            .stroke({ width: 3, color: 0xffffff, alpha: 0.85 });
+        }
+        h.webG.circle(0, 0, 40).circle(0, 0, 64).stroke({ width: 2.5, color: 0xffffff, alpha: 0.7 });
+        h.webG.visible = true;
+      } else if (h.webG) {
+        h.webG.visible = false;
+      }
       // Брудну руку видно одразу: бурі плями просто на перчатці.
       if (hd.dirty) {
         if (!h.mud) {
@@ -356,7 +445,21 @@ export class Renderer {
     this.progText.text = li.progress + ' / ' + li.target;
     this.barPulse = Math.max(0, this.barPulse - dt * 2);
     this.levelBar.scale.set(1 + this.barPulse * 0.18);
-    if (this._lives !== view.lives) { this._lives = view.lives; this.setHearts(view.lives, view.maxLives); }
+    // Команда або спільні серця — але не обидва одразу.
+    this.hearts.visible = !view.team;
+    this.team.visible = !!view.team;
+    if (view.team) {
+      this.setTeamHearts(view.hands, view.maxLives);
+      const b = [];
+      if (view.buff?.speed > 0) b.push(BUFFS[0].emoji);
+      if (view.buff?.size > 0) b.push(BUFFS[1].emoji);
+      if (view.hands.some((h) => h.self !== false && h.shield > 0)) b.push(BUFFS[2].emoji);
+      this.comboText.text = view.combo > 0 ? 'Пас ×' + view.combo + (b.length ? '  ' + b.join(' ') : '') : '';
+      this.comboText.visible = !!this.comboText.text;
+    } else {
+      this.comboText.visible = false;
+      if (this._lives !== view.lives) { this._lives = view.lives; this.setHearts(view.lives, view.maxLives); }
+    }
     this.msg.text = view.message || '';
     this.msg.visible = !!view.message;
 
@@ -424,6 +527,48 @@ export class Renderer {
       // Збитий камінь блідне — одразу видно, що він уже нікого не зачепить.
       if (!s.dead) g.rect(s.x - 5, s.y - 74, 10, 70).fill({ color: 0xffffff, alpha: 0.14 });
       drawRock(g, s.x, s.y, STONE.r, s.id, s.spin ?? 0, s.dead ? 0.45 : 1);
+    }
+  }
+
+  /**
+   * Пастки. Павутина ловить гравця, смола — кульку, тож і малюються вони
+   * по-різному: павутина світла й «сітчаста», смола — темна пляма, крізь яку
+   * кульку видно, але видно й те, що вона в ній загрузла.
+   */
+  drawTraps(traps, dt) {
+    const g = this.trapsG;
+    g.clear();
+    if (!traps || !traps.length) return;
+    this.trapT = (this.trapT ?? 0) + dt;
+
+    for (const t of traps) {
+      // Пастка, якій лишилось менше секунди, блимає — видно, що зараз зникне.
+      const fade = t.life < 1 ? 0.35 + 0.65 * Math.abs(Math.sin(this.trapT * 12)) : 1;
+      if (t.type === 'tar') {
+        const r = TRAP.tar.r;
+        for (let i = 0; i < 3; i++) {
+          const k = 1 - i * 0.22;
+          g.circle(t.x, t.y, r * k).fill({ color: 0x2a2330, alpha: (0.16 + i * 0.07) * fade });
+        }
+        // Бульбашки, щоб смола читалась як в'язка, а не як просто тінь.
+        for (let i = 0; i < 6; i++) {
+          const a = this.trapT * 0.6 + i * 1.05;
+          g.circle(t.x + Math.cos(a) * r * 0.55, t.y + Math.sin(a * 1.3) * r * 0.45, 7 + (i % 3) * 3)
+            .fill({ color: 0x4a3f55, alpha: 0.45 * fade });
+        }
+        continue;
+      }
+      const r = TRAP.web.r;
+      g.circle(t.x, t.y, r).fill({ color: 0xffffff, alpha: 0.16 * fade });
+      // Промені й кільця — класична павутина, усього кілька ліній.
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        g.moveTo(t.x, t.y).lineTo(t.x + Math.cos(a) * r, t.y + Math.sin(a) * r)
+          .stroke({ width: 2.5, color: 0xffffff, alpha: 0.85 * fade });
+      }
+      for (let k = 1; k <= 3; k++) {
+        g.circle(t.x, t.y, (r * k) / 3.2).stroke({ width: 2, color: 0xffffff, alpha: 0.6 * fade });
+      }
     }
   }
 

@@ -10,8 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, setChar, useRage } from '../src/shared/physics.js';
-import { TICK, MAX_PLAYERS, rulesFor } from '../src/shared/constants.js';
+import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, setChar, setPerks, useRage, canTap, maxLivesOf } from '../src/shared/physics.js';
+import { TICK, MAX_PLAYERS, rulesFor, modeOf } from '../src/shared/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, '..', 'dist');
@@ -63,14 +63,14 @@ function makeCode() {
  * ній у різні ігри неможливо. Хто приєднується пізніше, просто дізнається з
  * `welcome`, куди саме він потрапив.
  */
-function getRoom(code, hardcore) {
+function getRoom(code, mode) {
   let room = rooms.get(code);
   if (room) return room;
   room = {
     code,
-    hardcore: !!hardcore,
+    mode: modeOf(mode),
     clients: new Set(),
-    world: createWorld(hardcore),
+    world: createWorld(mode),
     acc: 0,
     last: Date.now(),
     sendAcc: 0,
@@ -116,7 +116,13 @@ function snapshot(room) {
     t: 'snap',
     ts: Date.now(),
     p,
-    h: w.hands.map((h) => [h.id, Math.round(h.x), Math.round(h.y), Math.max(0, +h.flash.toFixed(2)), Math.max(0, +h.slow.toFixed(2)), h.glove, +h.rage.toFixed(2), h.rages, h.dirty ? 1 : 0, h.char]),
+    h: w.hands.map((h) => [
+      h.id, Math.round(h.x), Math.round(h.y), Math.max(0, +h.flash.toFixed(2)), Math.max(0, +h.slow.toFixed(2)),
+      h.glove, +h.rage.toFixed(2), h.rages, h.dirty ? 1 : 0, h.char,
+      // Правило черги рахує сервер: клієнт отримує готове «можеш / не можеш».
+      h.lives, h.out ? 1 : 0, +h.web.toFixed(2), h.shield, w.team && !canTap(w, h) && !h.out && h.web <= 0 ? 1 : 0,
+      maxLivesOf(w, h),
+    ]),
     g: w.gull ? [Math.round(w.gull.x), Math.round(w.gull.y), w.gull.dir, +w.gull.flap.toFixed(2)] : null,
     df: +w.deflate.toFixed(2),
     sp: w.spikes.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fly' ? 1 : 0, s.phase === 'fall' ? 1 : 0]),
@@ -124,7 +130,10 @@ function snapshot(room) {
     // Кут камінця веземо цілим у сотих радіана — інакше він один з'їдав би
     // більше місця в снапшоті, ніж уся решта каменя.
     sn: w.stones.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fall' ? 1 : 0, s.dead ? 1 : 0, Math.round(s.spin * 100)]),
-    hc: w.hardcore ? 1 : 0,
+    md: w.mode,
+    tp: w.traps.map((t) => [t.id, Math.round(t.x), Math.round(t.y), t.type === 'web' ? 1 : 0, Math.round(t.life * 10)]),
+    cb: w.combo,
+    bf: [Math.round(w.buff.speed * 10), Math.round(w.buff.size * 10)],
     mk: w.medkits,
     sk: w.skin,
     so: w.spikesOn ? 1 : 0,
@@ -161,7 +170,7 @@ wss.on('connection', (ws) => {
     if (m.t === 'join') {
       if (ws.room) return;
       const code = (m.room || '').toUpperCase().trim() || makeCode();
-      const room = getRoom(code, !!m.hc);
+      const room = getRoom(code, m.mode || (m.hc ? 'hardcore' : 'normal'));
       if (room.clients.size >= MAX_PLAYERS) {
         ws.send(JSON.stringify({ t: 'error', msg: `У цій кімнаті вже ${MAX_PLAYERS} гравці` }));
         return;
@@ -182,8 +191,8 @@ wss.on('connection', (ws) => {
         restart(room.world);
       }
       ws.send(JSON.stringify({
-        t: 'welcome', room: code, side: ws.side,
-        maxLives: rulesFor(room.hardcore).lives, maxPlayers: MAX_PLAYERS, hc: room.hardcore ? 1 : 0,
+        t: 'welcome', room: code, side: ws.side, mode: room.mode,
+        maxLives: rulesFor(room.mode).lives, maxPlayers: MAX_PLAYERS, hc: room.mode === 'hardcore' ? 1 : 0,
       }));
       announce(room);
       return;
@@ -202,6 +211,9 @@ wss.on('connection', (ws) => {
     } else if (m.t === 'char') {
       // Хардкор-персонаж — так само особистий.
       setChar(ws.room.world, ws.handId, Number(m.i) || 0);
+    } else if (m.t === 'perks') {
+      // Перки тім-апа: особисті, але командні з них діють на всю кімнату.
+      setPerks(ws.room.world, ws.handId, Number(m.m) || 0);
     } else if (m.t === 'rage') {
       const ev = useRage(ws.room.world, ws.handId);
       if (ev) ws.room.pending.push(ev);

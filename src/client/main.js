@@ -2,14 +2,16 @@ import { Renderer } from './renderer.js';
 import { Input } from './input.js';
 import { Net, defaultServerUrl } from './net.js';
 import { sfx, setMuted, isMuted } from './sound.js';
-import { createWorld, step, addHand, setHandTarget, restart, levelInfo, advanceHand, useMedkit, anyHandSlowed, setSkin, setGlove, useRage } from '../shared/physics.js';
-import { WORLD, RULES, HARDCORE, PLAYER_COLORS, PLAYER_COLOR_NAMES, MEDKIT, RAGE, COIN, SKINS, GLOVES, CHARACTERS, handKit, biomeAt, rulesFor, skullReward } from '../shared/constants.js';
+import { createWorld, step, addHand, setHandTarget, restart, levelInfo, advanceHand, useMedkit, anyHandSlowed, setSkin, setGlove, useRage, canTap, maxLivesOf } from '../shared/physics.js';
+import { WORLD, RULES, HARDCORE, TEAM, PLAYER_COLORS, PLAYER_COLOR_NAMES, PLAYER_NAMES, MEDKIT, RAGE, COIN, SKINS, GLOVES, CHARACTERS, PERKS, BUFFS, handKit, biomeAt, rulesFor, skullReward, perkMask } from '../shared/constants.js';
 
 const $ = (s) => document.querySelector(s);
 
 const game = {
-  mode: null,        // 'solo' | 'local2' | 'online'
-  hardcore: false,   // хардкор — окремий режим, а не складність; див. HARDCORE
+  mode: null,        // як грають: 'solo' | 'local2' | 'online'
+  kind: 'normal',    // у ЩО грають: 'normal' | 'hardcore' | 'team' — це режим світу
+  hardcore: false,   // похідні від kind, щоб перевірки читались коротко
+  team: false,
   world: null,
   net: null,
   ghost: null,       // локальний прогноз власної долоні в мультиплеєрі
@@ -18,10 +20,18 @@ const game = {
 
 let renderer, input;
 let banner = { text: '', t: 0 };   // тимчасовий підпис «Рівень N!»
+let bestCombo = 0;                 // найдовша серія пасів за партію — у підсумок
 // Вибраний скін переживає перезавантаження — дитина не має щоразу шукати «свою» кульку.
 let skin = Math.min(Number(localStorage.getItem('balloon-skin') || 0), SKINS.length - 1);
 let glove = Math.min(Number(localStorage.getItem('balloon-glove') || 0), GLOVES.length - 1);
 let char = Math.min(Number(localStorage.getItem('balloon-char') || 0), CHARACTERS.length - 1);
+
+/** Режим світу тримаємо в одному місці: похідні прапорці не мають розходитись. */
+function setKind(k) {
+  game.kind = k;
+  game.hardcore = k === 'hardcore';
+  game.team = k === 'team';
+}
 
 async function boot() {
   renderer = await new Renderer().init($('#stage'));
@@ -29,9 +39,11 @@ async function boot() {
 
   $('#btn-solo').onclick = () => startLocal(1);
   $('#btn-local2').onclick = () => startLocal(2);
-  $('#btn-hc').onclick = () => startLocal(1, true);
-  $('#btn-hc2').onclick = () => startLocal(2, true);
-  $('#btn-hc-host').onclick = () => startOnline('', true);
+  $('#btn-hc').onclick = () => startLocal(1, 'hardcore');
+  $('#btn-hc2').onclick = () => startLocal(2, 'hardcore');
+  $('#btn-hc-host').onclick = () => startOnline('', 'hardcore');
+  $('#btn-team2').onclick = () => startLocal(2, 'team');
+  $('#btn-team-host').onclick = () => startOnline('', 'team');
   $('#btn-host').onclick = () => startOnline('');
   $('#btn-join').onclick = () => {
     const code = $('#room-input').value.trim().toUpperCase();
@@ -57,6 +69,7 @@ async function boot() {
   buildPicker('skin');
   buildPicker('glove');
   buildPicker('char');
+  buildPicker('perk');
   showCoins();
 
   $('#btn-med').onclick = (e) => { e.preventDefault(); $('#btn-med').blur(); doMedkit(); };
@@ -79,8 +92,9 @@ async function boot() {
   if (invite) { $('#room-input').value = invite.toUpperCase(); startOnline(invite.toUpperCase()); }
   else if (mode === 'solo') startLocal(1);
   else if (mode === 'local2') startLocal(2);
-  else if (mode === 'hardcore') startLocal(1, true);
-  else if (mode === 'hardcore2') startLocal(2, true);
+  else if (mode === 'hardcore') startLocal(1, 'hardcore');
+  else if (mode === 'hardcore2') startLocal(2, 'hardcore');
+  else if (mode === 'team') startLocal(2, 'team');
 
   renderer.app.ticker.add((t) => frame(Math.min(t.deltaMS / 1000, 1 / 20)));
 }
@@ -96,13 +110,17 @@ async function boot() {
 const wallet = {
   coins: Number(localStorage.getItem('balloon-coins') || 0),
   skulls: Number(localStorage.getItem('balloon-skulls') || 0),
+  tokens: Number(localStorage.getItem('balloon-tokens') || 0),
   owned: {
     skin: new Set(JSON.parse(localStorage.getItem('balloon-owned-skins') || '["red"]')),
     glove: new Set(JSON.parse(localStorage.getItem('balloon-owned-gloves') || '["hand"]')),
     char: new Set(JSON.parse(localStorage.getItem('balloon-owned-chars') || '["racoon"]')),
+    // Перки, на відміну від скінів, не «вдягаються»: куплений діє завжди.
+    perk: new Set(JSON.parse(localStorage.getItem('balloon-owned-perks') || '[]')),
   },
   earned: 0,        // монет за поточну партію — показуємо в кінці
   earnedSkulls: 0,  // і черепів за неї ж
+  earnedTokens: 0,  // і жетонів
 };
 
 function saveWallet() {
@@ -111,6 +129,8 @@ function saveWallet() {
   localStorage.setItem('balloon-owned-skins', JSON.stringify([...wallet.owned.skin]));
   localStorage.setItem('balloon-owned-gloves', JSON.stringify([...wallet.owned.glove]));
   localStorage.setItem('balloon-owned-chars', JSON.stringify([...wallet.owned.char]));
+  localStorage.setItem('balloon-tokens', String(wallet.tokens));
+  localStorage.setItem('balloon-owned-perks', JSON.stringify([...wallet.owned.perk]));
 }
 
 function addCoins(n) {
@@ -127,11 +147,20 @@ function addSkulls(n) {
   showCoins();
 }
 
+function addTokens(n) {
+  wallet.tokens += n;
+  wallet.earnedTokens += n;
+  saveWallet();
+  showCoins();
+}
+
 function showCoins() {
   $('#coins').textContent = '🪙 ' + wallet.coins;
   $('#coins-hud').textContent = '🪙 ' + wallet.coins;
   $('#skulls').textContent = '☠ ' + wallet.skulls;
   $('#skulls-hud').textContent = '☠ ' + wallet.skulls;
+  $('#tokens').textContent = '🤝 ' + wallet.tokens;
+  $('#tokens-hud').textContent = '🤝 ' + wallet.tokens;
 }
 
 /** Опис одного ряду магазину: список, де зберігається вибір, що робити після. */
@@ -141,6 +170,7 @@ const PICKERS = {
     name: '#skin-name', ability: '#skin-ability',
     money: 'coins', coin: '🪙',
     color: (it) => '#' + it.color.toString(16).padStart(6, '0'),
+    cur: () => skin,
     apply: (i) => { skin = i; if (demo) setSkin(demo, i); },
   },
   glove: {
@@ -148,6 +178,7 @@ const PICKERS = {
     name: '#glove-name', ability: '#glove-ability',
     money: 'coins', coin: '🪙',
     color: () => '#e8f2f8',
+    cur: () => glove,
     apply: (i) => { glove = i; },
   },
   // Третій ряд — хардкор-персонажі. Ряд той самий, що й два верхні, різниця
@@ -157,7 +188,20 @@ const PICKERS = {
     name: '#char-name', ability: '#char-ability',
     money: 'skulls', coin: '☠',
     color: () => '#4a3a63',
+    cur: () => char,
     apply: (i) => { char = i; },
+  },
+  // Четвертий ряд — перки тім-апа. Єдиний ряд, де вибору немає: перк не
+  // вдягається замість іншого, а просто діє, щойно куплений. Тому `multi`.
+  perk: {
+    box: '#perks', list: PERKS, store: null, multi: true,
+    name: '#perk-name', ability: '#perk-ability',
+    money: 'tokens', coin: '🤝',
+    color: () => '#1f8f6a',
+    // Перк не вибирається замість іншого, тож «поточного» тут немає — лише
+    // останній, на який дивились, щоб було що підписати під рядом.
+    cur: () => perkLook,
+    apply: (i) => { perkLook = i; },
   },
 };
 
@@ -165,6 +209,7 @@ const PICKERS = {
 const MONEY_HINT = {
   coins: 'Збивай кульку — за кожне влучання монета!',
   skulls: 'Черепи дають лише за пройдені хардкор-рівні.',
+  tokens: 'Жетони дають за паси в тім-апі — передавайте кульку одне одному.',
 };
 
 /**
@@ -195,6 +240,8 @@ function buildPicker(kind) {
 }
 
 /** Клік: своє — вдягаємо, чуже — пробуємо купити. */
+let perkLook = 0;   // на який перк дивиться підпис під рядом
+
 function pickItem(kind, i) {
   const p = PICKERS[kind];
   const it = p.list[i];
@@ -213,7 +260,7 @@ function pickItem(kind, i) {
     buildPicker(kind);   // ціна зникає, кружечок оживає
     flashPicker(kind, 'Куплено: ' + it.emoji + ' ' + it.name + '!', false);
   }
-  localStorage.setItem(p.store, String(i));
+  if (p.store) localStorage.setItem(p.store, String(i));
   p.apply(i);
   refreshPicker(kind);
 }
@@ -229,13 +276,15 @@ function flashPicker(kind, text, isError) {
 
 function refreshPicker(kind) {
   const p = PICKERS[kind];
-  const cur = kind === 'skin' ? skin : glove;
+  const cur = p.cur();
   const cells = $(p.box).children;
   for (let k = 0; k < cells.length; k++) {
     const it = p.list[k];
     const has = wallet.owned[kind].has(it.id);
     const b = cells[k].firstChild;
-    b.setAttribute('aria-pressed', String(k === cur));
+    // У ряду з вибором «натиснутий» — вибраний; у ряду перків — кожен куплений,
+    // бо там діють усі одразу.
+    b.setAttribute('aria-pressed', String(p.multi ? has : k === cur));
     b.classList.toggle('locked', !has);
     cells[k].lastChild.textContent = has ? '' : p.coin + ' ' + it.price;
   }
@@ -256,21 +305,26 @@ function ensureOwned() {
 
 // ------------------------------------------------------------------ режими
 
-function startLocal(players, hardcore = false) {
+function startLocal(players, kind = 'normal') {
+  setKind(kind);
   game.mode = players === 1 ? 'solo' : 'local2';
-  game.hardcore = hardcore;
-  game.world = createWorld(hardcore);
+  game.world = createWorld(kind);
   setSkin(game.world, skin);
   game.over = false;
-  // Обидва локальні гравці грають вибраним: пікер у меню один на всіх.
-  for (let i = 0; i < players; i++) addHand(game.world, 'h' + i, i, glove, char);
+  // Обидва локальні гравці грають вибраним: пікер у меню один на всіх, і перки
+  // за одним комп'ютером теж спільні — гаманець же один.
+  const mask = perkMask(wallet.owned.perk);
+  for (let i = 0; i < players; i++) addHand(game.world, 'h' + i, i, glove, char, mask);
   input.reset(players);
   const how = players === 1 ? 'Веди мишкою або WASD' : 'Гравець 1 — WASD, Гравець 2 — стрілки. На сенсорі — два пальці';
-  showHud(hardcore ? '☠ Хардкор: камінці з неба, шипи щорівня, два серця. ' + how : how);
+  const tip = kind === 'hardcore' ? '☠ Хардкор: камінці з неба, шипи щорівня, два серця. '
+    : kind === 'team' ? '🤝 Тім-ап: тапнув — пасуй! Двічі поспіль не можна. '
+    : '';
+  showHud(tip + how);
   sfx.start();
 }
 
-async function startOnline(room, hardcore = false) {
+async function startOnline(room, kind = 'normal') {
   setNote("З'єднуємось…", false);
   const net = new Net();
   net.onError = (m) => setNote(m, true);
@@ -280,17 +334,18 @@ async function startOnline(room, hardcore = false) {
     $('#peer-info').textContent = peerLabel(m.n, net.maxPlayers);
   };
   try {
-    await net.connect(defaultServerUrl(), room, hardcore);
+    await net.connect(defaultServerUrl(), room, kind);
   } catch (e) {
     setNote(e.message + '. Запусти сервер: npm start', true);
     return;
   }
   // Режим кімнати вирішує той, хто її створив: світ у ній один. Тому дивимось
   // не на те, що ми просили, а на те, що відповів сервер.
-  game.hardcore = net.hardcore;
+  setKind(net.mode);
   net.setSkin(skin);    // кулька в кімнаті одна, тож діє вибір того, хто обрав останнім
-  if (net.hardcore) net.setChar(char);   // персонаж особистий — сервер змінить лише твою руку
+  if (game.hardcore) net.setChar(char);  // персонаж особистий — сервер змінить лише твою руку
   else net.setGlove(glove);              // як і перчатка у звичайній грі
+  if (game.team) net.setPerks(perkMask(wallet.owned.perk));
   game.mode = 'online';
   game.net = net;
   game.world = null;
@@ -300,14 +355,17 @@ async function startOnline(room, hardcore = false) {
   $('#room-code').textContent = net.room;
   $('#room-badge').hidden = false;
   $('#peer-info').textContent = peerLabel(net.peers, net.maxPlayers);
-  const who = net.hardcore
+  const who = game.hardcore
     ? '☠ Хардкор! Ти — ' + CHARACTERS[char].emoji + ' ' + CHARACTERS[char].name + ' у ' + PLAYER_COLOR_NAMES[net.side] + 'му нашийнику'
-    : 'Ти — ' + PLAYER_COLOR_NAMES[net.side] + ' долоня';
+    : game.team
+      ? '🤝 Тім-ап! Ти — ' + PLAYER_COLOR_NAMES[net.side] + ' долоня. Тапнув — пасуй, двічі поспіль не можна'
+      : 'Ти — ' + PLAYER_COLOR_NAMES[net.side] + ' долоня';
   showHud(who + '. Дай друзям код ' + net.room);
-  // Просив хардкор, а кімната виявилась звичайною (або навпаки) — про це треба
-  // сказати прямо, інакше гравець довго не розумів би, чому нема камінців.
-  if (hardcore !== net.hardcore) {
-    setNote(net.hardcore ? 'Ця кімната хардкорна ☠' : 'Ця кімната звичайна, без хардкора', false);
+  // Просив один режим, а кімната виявилась іншою — про це треба сказати прямо,
+  // інакше гравець довго не розумів би, чому нема камінців (чи пасів).
+  if (kind !== net.mode) {
+    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝' }[net.mode]
+      || 'Ця кімната звичайна', false);
   }
   sfx.start();
 }
@@ -325,7 +383,7 @@ function toMenu() {
   game.net = null;
   game.world = null;
   game.mode = null;
-  game.hardcore = false;
+  setKind('normal');
   game.over = false;
   input.reset(2);
   $('#menu').hidden = false;
@@ -341,6 +399,8 @@ function doRestart() {
   game.over = false;
   wallet.earned = 0;
   wallet.earnedSkulls = 0;
+  wallet.earnedTokens = 0;
+  bestCombo = 0;
   if (game.mode === 'online') game.net.restart();
   else if (game.world) restart(game.world);
   sfx.start();
@@ -374,7 +434,7 @@ function updateRageButton(hand) {
   const box = $('#rage');
   // Шал — здібність боксерської перчатки, і в хардкорі його просто немає:
   // handKit там віддає персонажа, а в жодного персонажа rage не стоїть.
-  const on = !!hand && handKit(game.hardcore, hand.glove ?? 0, hand.char ?? 0).rage;
+  const on = !!hand && handKit(game.kind, hand.glove ?? 0, hand.char ?? 0).rage;
   box.hidden = !on;
   if (!on) return;
   const btn = $('#btn-rage');
@@ -392,16 +452,19 @@ function updateRageButton(hand) {
 function updateMedButton(medkits, lives, maxLives, slowed) {
   const btn = $('#btn-med');
   btn.disabled = !(medkits > 0 && (lives < maxLives || slowed));
-  const per = game.hardcore ? HARDCORE.medkits : MEDKIT.perLevel;
+  const per = game.hardcore ? HARDCORE.medkits : game.team ? TEAM.medkits : MEDKIT.perLevel;
   $('#med-left').textContent = medkits + ' / ' + per + ' на рівень';
 }
 
 function showHud(tip) {
   wallet.earned = 0;
   wallet.earnedSkulls = 0;
-  // Лічильник черепів показуємо лише там, де їх дають, — щоб у дитячій грі не
-  // світився ще один незрозумілий рахунок.
+  wallet.earnedTokens = 0;
+  bestCombo = 0;
+  // Лічильники другої й третьої валют показуємо лише там, де їх дають, — щоб у
+  // дитячій грі не світились два незрозумілі рахунки.
   $('#skulls-hud').hidden = !game.hardcore;
+  $('#tokens-hud').hidden = !game.team;
   $('#menu').hidden = true;
   $('#gameover').hidden = true;
   $('#hud').hidden = false;
@@ -430,11 +493,20 @@ function frame(dt) {
 
   if (view) {
     renderer.draw(view, dt);
+    if (view.combo > bestCombo) bestCombo = view.combo;
     if (game.mode) {
       // У мультиплеєрі сервер відпускає долоню того, хто натиснув, тож і кнопка
       // має дивитись саме на свою руку, а не на будь-чию.
       const mine = game.mode === 'online' ? view.hands.filter((h) => h.self) : view.hands;
-      updateMedButton(view.medkits ?? 0, view.lives, view.maxLives, anyHandSlowed(mine));
+      // У тім-апі серця особисті, тож і кнопка аптечки дивиться на СВОЇ серця,
+      // а не на спільні — і додатково світиться, коли є з чого визволятись.
+      if (view.team) {
+        const me = mine[0];
+        updateMedButton(view.medkits ?? 0, me?.lives ?? 0, me?.maxLives ?? 3,
+          anyHandSlowed(mine) || mine.some((h) => h.web > 0));
+      } else {
+        updateMedButton(view.medkits ?? 0, view.lives, view.maxLives, anyHandSlowed(mine));
+      }
       updateRageButton(mine[0]);
     }
   }
@@ -456,21 +528,30 @@ function frameLocal(dt) {
     hands: w.hands.map((h) => ({
       id: h.id, player: h.player, x: h.x, y: h.y, flash: h.flash, slow: h.slow,
       glove: h.glove, char: h.char, rage: h.rage, rages: h.rages, dirty: h.dirty, self: false,
+      // Правило черги рахуємо тут, щоб малювальник просто малював привида,
+      // а не переказував правила гри своїми словами.
+      lives: h.lives, out: h.out, web: h.web, shield: h.shield,
+      maxLives: maxLivesOf(w, h),
+      locked: w.team && !h.out && h.web <= 0 && !canTap(w, h),
     })),
     score: w.score,
     lives: w.lives,
-    maxLives: rulesFor(w.hardcore).lives,
+    maxLives: rulesFor(w.mode).lives,
     state: w.state,
     gull: w.gull,
     spikes: w.spikes.map((s) => ({ id: s.id, x: s.x, y: s.y, flying: s.phase !== 'warn', dead: s.phase === 'fall' })),
     stones: w.stones.map((s) => ({ id: s.id, x: s.x, y: s.y, spin: s.spin, flying: s.phase === 'fall', dead: s.dead })),
+    traps: w.traps.map((t) => ({ id: t.id, x: t.x, y: t.y, type: t.type, life: t.life })),
     poops: w.poops.map((p) => ({ id: p.id, x: p.x, y: p.y })),
     medkits: w.medkits,
     skin: w.skin,
     deflate: w.deflate,
     spikesOn: w.spikesOn,
     hardcore: w.hardcore,
-    level: levelInfo(w.score, w.hardcore),
+    team: w.team,
+    combo: w.combo,
+    buff: w.buff,
+    level: levelInfo(w.score, w.mode),
     message: banner.t > 0 ? banner.text : (w.state === 'respawn' ? 'Кулька впала!' : ''),
   };
 }
@@ -490,7 +571,7 @@ function frameOnline(dt) {
   const mine = snap.hands.find((h) => h.id === myId);
   // Кит потрібен і тут: пацюк ходить за курсором помітно швидше, і без цього
   // локальна рука розходилась би з серверною рівно на цю різницю.
-  const kit = handKit(snap.hardcore, mine?.glove ?? 0, mine?.char ?? 0);
+  const kit = handKit(snap.mode, mine?.glove ?? 0, mine?.char ?? 0);
   const g = advanceHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, (mine?.slow ?? 0) > 0, kit);
   game.ghost.x = g.x;
   game.ghost.y = g.y;
@@ -512,13 +593,17 @@ function frameOnline(dt) {
     gull: snap.gull,
     spikes: snap.spikes,
     stones: snap.stones,
+    traps: snap.traps,
     poops: snap.poops,
     medkits: snap.medkits,
     skin: snap.skin,
     deflate: snap.deflate,
     spikesOn: snap.spikesOn,
     hardcore: snap.hardcore,
-    level: levelInfo(snap.score, snap.hardcore),
+    team: snap.team,
+    combo: snap.combo,
+    buff: snap.buff,
+    level: levelInfo(snap.score, snap.mode),
     message: banner.t > 0 ? banner.text
       : snap.state === 'waiting' ? 'Чекаємо на друзів…'
       : snap.state === 'respawn' ? 'Кулька впала!' : '',
@@ -546,12 +631,16 @@ function idleView(dt) {
     gull: null,
     spikes: [],
     stones: [],
+    traps: [],
     poops: [],
     medkits: 0,
     skin: demo.skin,
     deflate: 0,
     spikesOn: false,
     hardcore: false,
+    team: false,
+    combo: 0,
+    buff: { speed: 0, size: 0 },
     level: levelInfo(0),
     message: '',
     hud: false,
@@ -608,6 +697,41 @@ function onWorldEvent(e) {
     };
     renderer.burst(e.x, e.y, 0x3ec46d, 1);
     sfx.heal();
+  } else if (e.type === 'pass') {
+    // Жетон за кожен пас — і всім одразу, на відміну від монет: пас це робота
+    // двох, і ділити його на «мій» і «чужий» було б проти суті режиму.
+    addTokens(TEAM.tokenPerPass);
+    if (e.level % 5 !== 0) banner = { text: 'Пас! ×' + e.level, t: 0.8 };
+    sfx.pass(Math.min(1, e.level / 15));
+  } else if (e.type === 'buff') {
+    const b = BUFFS[e.buff ?? 0];
+    addTokens(TEAM.tokenPerBuff);
+    banner = { text: e.level + ' пасів! ' + b.emoji + ' ' + b.name + ' — ' + b.note, t: 2.4 };
+    renderer.burst(e.x, e.y, 0x8ef0c8, 1);
+    renderer.barPulse = 1;
+    sfx.level();
+  } else if (e.type === 'trap') {
+    banner = { text: e.player === 1 ? 'Павутина! 🕸 не влети' : 'Смола! 🫧 кулька в ній грузне', t: 2.0 };
+    sfx.trap();
+  } else if (e.type === 'web') {
+    banner = { text: 'Застряг у павутині 🕸 нехай сусід визволить!', t: 2.2 };
+    renderer.burst(e.x, e.y, 0xffffff, 0.8);
+    sfx.web();
+  } else if (e.type === 'freed') {
+    banner = { text: 'Визволили! 🤝', t: 1.4 };
+    renderer.burst(e.x, e.y, 0x8ef0c8, 0.9);
+    sfx.wash();
+  } else if (e.type === 'shield') {
+    banner = { text: 'Щит витримав пастку 🛡', t: 1.6 };
+    renderer.burst(e.x, e.y, 0x7fd8ff, 0.9);
+    sfx.parry();
+  } else if (e.type === 'lose') {
+    banner = { text: 'Не встиг! ' + PLAYER_NAMES[e.player] + ' втрачає серце ❤️ · лишилось ' + e.level, t: 2.0 };
+  } else if (e.type === 'out') {
+    banner = { text: PLAYER_NAMES[e.player] + ' вибув! Грайте далі без нього', t: 2.6 };
+    renderer.burst(e.x, e.y, 0xff4d6d, 1);
+    renderer.shake = 0.8;
+    sfx.over();
   } else if (e.type === 'stoneWarn') {
     banner = { text: 'Камінь! ☠', t: 1.0 };
     sfx.stoneWarn();
@@ -671,6 +795,9 @@ function onWorldEvent(e) {
 
 function endGame(score) {
   game.over = true;
+  $('#earned-tokens').textContent = wallet.earnedTokens;
+  $('#best-combo').textContent = bestCombo;
+  $('#team-earned').hidden = !game.team;
   $('#earned').textContent = wallet.earned;
   $('#final-score').textContent = score;
   $('#final-level').textContent = levelInfo(score, game.hardcore).level;
@@ -680,7 +807,7 @@ function endGame(score) {
   sfx.over();
   // Рекорд у хардкорі окремий: рівні там удвічі коротші, тож спільний рекорд
   // порівнював би непорівнянне.
-  const key = game.hardcore ? 'balloon-best-hardcore' : 'balloon-best';
+  const key = game.hardcore ? 'balloon-best-hardcore' : game.team ? 'balloon-best-team' : 'balloon-best';
   const best = Math.max(score, Number(localStorage.getItem(key) || 0));
   localStorage.setItem(key, String(best));
   $('#best-score').textContent = best;

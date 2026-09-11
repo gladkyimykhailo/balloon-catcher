@@ -15,7 +15,8 @@ export class Net {
     this.peers = 1;
     this.maxLives = 3;
     this.maxPlayers = 4;
-    this.hardcore = false;    // режим кімнати; його вирішує сервер, а не клієнт
+    this.mode = 'normal';     // режим кімнати; його вирішує сервер, а не клієнт
+    this.hardcore = false;
     this.offset = null;       // різниця годинників клієнта і сервера
     this.onEvent = () => {};
     this.onStatus = () => {};
@@ -23,17 +24,17 @@ export class Net {
   }
 
   /**
-   * `hardcore` — це лише побажання на випадок, коли кімната створюється зараз.
+   * `mode` — це лише побажання на випадок, коли кімната створюється зараз.
    * Якщо кімната вже існує, діє ЇЇ режим: два гравці в одній кімнаті не можуть
    * грати в різні ігри, бо світ у них один. Сервер відповість, що вийшло.
    */
-  connect(url, room, hardcore = false) {
+  connect(url, room, mode = 'normal') {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       this.ws = ws;
       let settled = false;
 
-      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '', hc: hardcore ? 1 : 0 }));
+      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '', mode }));
 
       ws.onmessage = (e) => {
         const m = JSON.parse(e.data);
@@ -42,7 +43,8 @@ export class Net {
           this.room = m.room;
           this.maxLives = m.maxLives;
           this.maxPlayers = m.maxPlayers ?? 4;
-          this.hardcore = !!m.hc;
+          this.mode = m.mode || (m.hc ? 'hardcore' : 'normal');
+          this.hardcore = this.mode === 'hardcore';
           settled = true;
           resolve(m);
         } else if (m.t === 'snap') {
@@ -106,6 +108,11 @@ export class Net {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'char', i }));
   }
 
+  /** Перки тім-апа: купує кожен собі, але два з трьох діють на всю команду. */
+  setPerks(mask) {
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'perks', m: mask }));
+  }
+
   rage() {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'rage' }));
   }
@@ -142,6 +149,10 @@ export class Net {
         flash: hb[3], slow: hb[4] ?? 0,
         glove: hb[5] ?? 0, rage: hb[6] ?? 0, rages: hb[7] ?? 0, dirty: hb[8] === 1,
         char: hb[9] ?? 0,
+        // Тім-ап: усе особисте. `locked` рахує сервер — правило черги живе там,
+        // і клієнту не треба знати, хто ще може бити.
+        lives: hb[10] ?? 0, out: hb[11] === 1, web: hb[12] ?? 0,
+        shield: hb[13] ?? 0, locked: hb[14] === 1, maxLives: hb[15] ?? 3,
       };
     });
 
@@ -191,9 +202,15 @@ export class Net {
       };
     });
 
+    // Пастки стоять на місці, тож їх не інтерполюємо — везеться лише те, що
+    // міняється: залишок життя (по ньому пастка блимає перед зникненням).
+    const traps = (b.tp ?? []).map((t) => ({ id: t[0], x: t[1], y: t[2], type: t[3] ? 'web' : 'tar', life: t[4] / 10 }));
+
     return {
-      points, hands, gull, spikes, poops, stones,
-      deflate: b.df ?? 0, spikesOn: !!b.so, hardcore: !!b.hc,
+      points, hands, gull, spikes, poops, stones, traps,
+      deflate: b.df ?? 0, spikesOn: !!b.so,
+      mode: b.md || 'normal', hardcore: b.md === 'hardcore', team: b.md === 'team',
+      combo: b.cb ?? 0, buff: { speed: (b.bf?.[0] ?? 0) / 10, size: (b.bf?.[1] ?? 0) / 10 },
       score: b.sc, lives: b.lv, state: b.st,
       medkits: b.mk ?? 0, skin: b.sk ?? 0,
     };

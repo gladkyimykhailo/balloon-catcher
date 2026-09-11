@@ -6,7 +6,7 @@
 //      стискаєш кульку -> площа падає -> тиск росте -> вона випинається деінде.
 // Саме тому вона мнеться від долоні, а потім пружно вистрілює назад.
 
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, skinAt, gloveAt, handKit, biomeAt, bucketSpots, rulesFor } from './constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, skinAt, gloveAt, handKit, biomeAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
 
 const TAU = Math.PI * 2;
 
@@ -15,8 +15,8 @@ const TAU = Math.PI * 2;
  * У хардкорі рівні вдвічі коротші: 50 влучань із двома серцями під камінням —
  * це не рівень, а вечір, і черепи за нього чекали б надто довго.
  */
-export function levelTarget(n, hardcore = false) {
-  const base = LEVELS.first * Math.pow(LEVELS.growth, n - 1) * (hardcore ? HARDCORE.levelScale : 1);
+export function levelTarget(n, mode = 'normal') {
+  const base = LEVELS.first * Math.pow(LEVELS.growth, n - 1) * levelScaleFor(mode);
   return Math.max(5, Math.round(base / 5) * 5);
 }
 
@@ -24,14 +24,14 @@ export function levelTarget(n, hardcore = false) {
  * Рівень, прогрес і ціль — чиста функція від загального рахунку.
  * Завдяки цьому клієнту в мультиплеєрі досить самого рахунку зі снапшота.
  */
-export function levelInfo(score, hardcore = false) {
+export function levelInfo(score, mode = 'normal') {
   let level = 1;
   let base = 0;
-  let target = levelTarget(1, hardcore);
+  let target = levelTarget(1, mode);
   while (score - base >= target) {
     base += target;
     level++;
-    target = levelTarget(level, hardcore);
+    target = levelTarget(level, mode);
   }
   return { level, progress: score - base, target };
 }
@@ -41,10 +41,15 @@ export function levelInfo(score, hardcore = false) {
  * свої рівні, камінці з неба і персонажі замість перчаток. Прапорець живе саме
  * у світі, бо все це має бути однаковим для всіх, хто грає в цій кімнаті.
  */
-export function createWorld(hardcore = false) {
-  const R = rulesFor(hardcore);
+export function createWorld(mode = 'normal') {
+  const m = modeOf(mode);
+  const R = rulesFor(m);
   const w = {
-    hardcore: !!hardcore,
+    mode: m,
+    // Два прапорці замість одного рядка всюди: перевірок на режим у фізиці
+    // десятки, і `w.hardcore` читається краще за `w.mode === 'hardcore'`.
+    hardcore: m === 'hardcore',
+    team: m === 'team',
     time: 0,
     tick: 0,
     balloon: null,
@@ -52,10 +57,10 @@ export function createWorld(hardcore = false) {
     score: 0,
     level: 1,
     gull: null,          // чайка в польоті
-    gullTimer: hardcore ? HARDCORE.gullPeriod : GULL.period,
+    gullTimer: m === 'hardcore' ? HARDCORE.gullPeriod : GULL.period,
     deflate: 0,          // скільки секунд кулька ще здута
     spikes: [],          // шипи в польоті або на попередженні
-    spikesOn: !!hardcore,  // чи випав поточному рівню «шиповий» жереб (у хардкорі — завжди)
+    spikesOn: m === 'hardcore',  // чи випав поточному рівню «шиповий» жереб (у хардкорі — завжди)
     spikeTimer: 0,
     spikeSeq: 0,
     poops: [],           // те, що падає з чайки
@@ -63,7 +68,17 @@ export function createWorld(hardcore = false) {
     stones: [],          // камінці: хардкорна загроза згори
     stoneSeq: 0,
     stoneTimer: STONE.maxGap,
-    medkits: hardcore ? HARDCORE.medkits : MEDKIT.perLevel,   // заряди аптечки, спільні на всіх гравців
+    // Тім-ап. Серця тут особисті (живуть у руках), а у світі — спільне: черга
+    // пасів, серія і командні бафи.
+    traps: [],
+    trapSeq: 0,
+    trapTimer: TRAP.firstDelay,
+    combo: 0,            // скільки пасів поспіль без падіння
+    bestCombo: 0,
+    lastTapper: null,    // хто тапнув останнім — саме він і не може вдруге
+    buffTier: 0,         // скільки бафів уже видано за цю серію
+    buff: { speed: 0, size: 0 },   // командні таймери
+    medkits: m === 'hardcore' ? HARDCORE.medkits : m === 'team' ? TEAM.medkits : MEDKIT.perLevel,   // заряди аптечки, спільні на всіх гравців
     skin: 0,             // скін кульки; від нього залежать здібності нижче
     lives: R.lives,
     paused: false,         // напр., чекаємо, поки приєднається другий гравець
@@ -123,7 +138,7 @@ export function spawnBalloon(w, cx, cy) {
   return w.balloon;
 }
 
-export function addHand(w, id, player, glove = 0, char = 0) {
+export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
   const h = {
     id, player,
     x: WORLD.w / 2, y: WORLD.h - 180,
@@ -138,15 +153,56 @@ export function addHand(w, id, player, glove = 0, char = 0) {
     glove: 0,         // скін перчатки; на відміну від кульки, він особистий
     char: 0,          // хардкор-персонаж — теж особистий, діє замість перчатки
     stink: 0,         // ванючці лишилось стільки секунд до наступного смороду
+    // Тім-ап: усе особисте живе тут, бо і серця в цьому режимі особисті.
+    perks: perks | 0,
+    lives: 0,         // власні серця (лише в тім-апі; решта режимів має w.lives)
+    out: false,       // серця скінчились — гравець вибув, решта грає далі
+    web: 0,           // скільки секунд ще тримає павутина
+    shield: 0,        // заряд щита: одна пастка мине
     rage: 0,          // скільки секунд ще триває шалений режим
     rages: RAGE.perLevel,
     dirty: false,     // чайка влучила: кулька ковзає, очки не йдуть
   };
   h.glove = clampIndex(glove);
   h.char = clampIndex(char);
+  h.lives = teamLives(h);
   applyKit(w, h);
   w.hands.push(h);
   return h;
+}
+
+/** Скільки серць у цього гравця в тім-апі: три, а з перком — чотири. */
+function teamLives(h) {
+  return TEAM.lives + (hasPerk(h.perks, 'extraHeart') ? 1 : 0);
+}
+
+/**
+ * Стеля серць цієї руки — її треба знати й малювальнику: у тім-апі порожні
+ * серця показують, скільки ще можна втратити, і чуже «запасне серце» має бути
+ * видно, а не вгадуватись.
+ */
+export function maxLivesOf(w, h) {
+  return w.team ? teamLives(h) : rulesFor(w.mode).lives;
+}
+
+/** Перки гравця. Як перчатка й персонаж — річ особиста, надсилається клієнтом. */
+export function setPerks(w, id, mask) {
+  const h = getHand(w, id);
+  if (!h) return;
+  const before = teamLives(h);
+  h.perks = mask | 0;
+  // Серце від перка доїжджає лише тому, хто ще нічого не втратив: перки
+  // прилітають одразу після входу в кімнату, а не посеред партії.
+  if (w.team && !h.out && h.lives === before) h.lives = teamLives(h);
+}
+
+/**
+ * Чи діє перк на всю команду. Два з трьох — командні: досить, щоб хтось один
+ * приніс покупку в кімнату, інакше кооператив перетворився б на змагання
+ * гаманців.
+ */
+function teamPerk(w, id) {
+  return w.hands.some((h) => !h.out && hasPerk(h.perks, id));
 }
 
 /**
@@ -154,7 +210,21 @@ export function addHand(w, id, player, glove = 0, char = 0) {
  * Уся фізика нижче питає саме кит, тому їй байдуже, який зараз режим.
  */
 function kitOf(w, h) {
-  return handKit(w.hardcore, h.glove, h.char);
+  return handKit(w.mode, h.glove, h.char);
+}
+
+/**
+ * Той самий кит, але з командними бафами тім-апа. Бафи діють на всіх живих
+ * одразу, тож множники лежать у світі, а не в руці.
+ */
+function buffedKit(w, h) {
+  const kit = kitOf(w, h);
+  if (!w.team) return kit;
+  return {
+    ...kit,
+    speedMul: kit.speedMul * (w.buff.speed > 0 ? BUFFS[0].speedMul : 1),
+    sizeMul: kit.sizeMul * (w.buff.size > 0 ? BUFFS[1].sizeMul : 1),
+  };
 }
 
 /**
@@ -190,6 +260,20 @@ export function setGlove(w, id, i, hand = null) {
   if (!h) return;
   h.glove = clampIndex(i);
   applyKit(w, h);
+}
+
+/**
+ * Правило тім-апа: тапнувши, ти не можеш тапнути вдруге, поки кульку не
+ * зачепить хтось інший. Тому «свіжий» тут — це не останній, хто бив.
+ *
+ * Виняток рятує від глухого кута: якщо більше нема кому бити (усі інші вибули
+ * чи сидять у павутині), заборона знімається. Інакше останній живий гравець
+ * просто дивився б, як кулька падає.
+ */
+export function canTap(w, h) {
+  if (h.out || h.web > 0) return false;
+  if (w.lastTapper !== h.id) return true;
+  return !w.hands.some((o) => o !== h && !o.out && o.web <= 0);
 }
 
 /**
@@ -245,6 +329,8 @@ export function step(w, dt) {
   updateWashing(w);
   updateSpikes(w, dt);
   updateStones(w, dt);
+  updateTraps(w, dt);
+  updateBuffs(w, dt);
   updateInflation(w, dt);
 
   if (w.state === 'respawn') {
@@ -376,7 +462,7 @@ function stinksInRoom(w) {
 
 /** Скільки зарядів аптечки видається на рівень. */
 function medkitsFor(w) {
-  return w.hardcore ? HARDCORE.medkits : MEDKIT.perLevel;
+  return w.hardcore ? HARDCORE.medkits : w.team ? TEAM.medkits : MEDKIT.perLevel;
 }
 
 /**
@@ -409,13 +495,21 @@ function onLevelUp(w, lvl) {
 export function useMedkit(w, handId = null) {
   if (w.state === 'over' || w.medkits <= 0) return null;
   const hands = handId ? w.hands.filter((h) => h.id === handId) : w.hands;
-  const canHeal = w.lives < rulesFor(w.hardcore).lives;
-  const canFreshen = hands.some((h) => h.slow > 0);
+  // У тім-апі серця особисті, тож аптечка лікує саме того, хто натиснув, — і
+  // заразом виплутує його з павутини: сидіти в ній і тримати заряд намарне
+  // було б безглуздо.
+  const canHeal = w.team
+    ? hands.some((h) => !h.out && h.lives < teamLives(h))
+    : w.lives < rulesFor(w.mode).lives;
+  const canFreshen = hands.some((h) => h.slow > 0 || (w.team && h.web > 0));
   if (!canHeal && !canFreshen) return null;
 
   w.medkits--;
-  if (canHeal) w.lives = Math.min(rulesFor(w.hardcore).lives, w.lives + MEDKIT.heal);
-  for (const h of hands) h.slow = 0;
+  if (canHeal) {
+    if (w.team) for (const h of hands) { if (!h.out) h.lives = Math.min(teamLives(h), h.lives + MEDKIT.heal); }
+    else w.lives = Math.min(rulesFor(w.mode).lives, w.lives + MEDKIT.heal);
+  }
+  for (const h of hands) { h.slow = 0; h.web = 0; }
   return { type: 'heal', x: WORLD.w / 2, y: 230, player: -1, level: w.medkits, healed: canHeal };
 }
 
@@ -471,7 +565,9 @@ function updateWashing(w) {
 /** Кидає жереб, чи буде поточний рівень із шипами. */
 function rollSpikes(w) {
   // У хардкорі жереба немає: шипи є на кожному рівні, включно з першим.
-  w.spikesOn = w.hardcore || (w.level >= SPIKE.firstLevel && Math.random() < SPIKE.levelChance);
+  // У тім-апі, навпаки, шипів немає зовсім: у нього свої пастки, і дві системи
+  // загроз одночасно перетворили б екран на кашу.
+  w.spikesOn = w.hardcore || (!w.team && w.level >= SPIKE.firstLevel && Math.random() < SPIKE.levelChance);
   w.spikes.length = 0;
   w.spikeTimer = SPIKE.minGap;
 }
@@ -667,8 +763,132 @@ function stoneHitsBalloon(b, x, y) {
   return false;
 }
 
+/**
+ * Пастки тім-апа. Їх дві, і вони навмисно різні: павутина б'є по ГРАВЦЕВІ,
+ * смола — по КУЛЬЦІ. Павутина цінна саме тим, що ламає чергу пасів: поки один
+ * у ній, решта мусить передавати меншим колом. Тому з неї можна визволити —
+ * досить, щоб сусід доторкнувся: це єдине місце в грі, де гравці допомагають
+ * один одному руками, а не просто разом б'ють кульку.
+ */
+function updateTraps(w, dt) {
+  if (!w.team || w.state !== 'playing') return;
+  const hold = teamPerk(w, 'quickFree') ? TRAP.web.holdQuick : TRAP.web.hold;
+
+  for (let i = w.traps.length - 1; i >= 0; i--) {
+    const t = w.traps[i];
+    t.life -= dt;
+    if (t.life <= 0) { w.traps.splice(i, 1); continue; }
+    if (t.type !== 'web') continue;
+
+    for (const h of w.hands) {
+      if (h.out || h.web > 0) continue;
+      if (Math.hypot(h.x - t.x, h.y - t.y) > TRAP.web.r + h.r) continue;
+      // Щит — саме тут: «одна пастка мине». Заряд особистий, бо й ловить
+      // пастка особисто.
+      if (h.shield > 0) {
+        h.shield--;
+        w.events.push({ type: 'shield', x: h.x, y: h.y, player: h.player });
+      } else {
+        h.web = hold;
+        w.events.push({ type: 'web', x: h.x, y: h.y, player: h.player });
+      }
+      w.traps.splice(i, 1);
+      break;
+    }
+  }
+
+  // Визволення: вільний сусід торкнувся того, хто застряг.
+  for (const h of w.hands) {
+    if (h.web <= 0 || h.out) continue;
+    h.web = Math.max(0, h.web - dt);
+    if (h.web <= 0) continue;
+    for (const o of w.hands) {
+      if (o === h || o.out || o.web > 0) continue;
+      if (Math.hypot(o.x - h.x, o.y - h.y) < h.r + o.r + 12) {
+        h.web = 0;
+        w.events.push({ type: 'freed', x: h.x, y: h.y, player: h.player });
+        break;
+      }
+    }
+  }
+
+  w.trapTimer -= dt;
+  if (w.trapTimer > 0) return;
+  w.trapTimer = TRAP.minGap + Math.random() * (TRAP.maxGap - TRAP.minGap);
+  const web = Math.random() < TRAP.webChance;
+  if (web) {
+    // Павутина висить там, де гравці й літають: між кулькою і підлогою.
+    w.traps.push({
+      id: ++w.trapSeq, type: 'web',
+      x: 90 + Math.random() * (WORLD.w - 180),
+      y: 300 + Math.random() * (FLOOR_Y - 380),
+      life: TRAP.web.life,
+    });
+  } else {
+    // Смола — навпаки, на шляху кульки: під нею, щоб та встигла в неї влетіти.
+    const c = balloonCenter(w.balloon);
+    w.traps.push({
+      id: ++w.trapSeq, type: 'tar',
+      x: clamp(c.x + (Math.random() - 0.5) * 420, 120, WORLD.w - 120),
+      y: clamp(c.y + 120 + Math.random() * 180, 200, FLOOR_Y - 150),
+      life: TRAP.tar.life,
+    });
+  }
+  w.events.push({ type: 'trap', x: w.traps.at(-1).x, y: w.traps.at(-1).y, player: web ? 1 : 0 });
+}
+
+/** Смола, в якій зараз грузне кулька (або null). Читається в `substep`. */
+function tarAt(w) {
+  if (!w.team) return null;
+  const c = balloonCenter(w.balloon);
+  for (const t of w.traps) {
+    if (t.type !== 'tar') continue;
+    if (Math.hypot(c.x - t.x, c.y - t.y) < TRAP.tar.r) return t;
+  }
+  return null;
+}
+
+/** Командні бафи просто збігають; що вони роблять — див. `moveHands`. */
+function updateBuffs(w, dt) {
+  if (!w.team) return;
+  if (w.buff.speed > 0) w.buff.speed = Math.max(0, w.buff.speed - dt);
+  if (w.buff.size > 0) w.buff.size = Math.max(0, w.buff.size - dt);
+}
+
+/**
+ * Пас зараховано: нарощуємо серію і, на кожному п'ятому, видаємо команді баф.
+ * Серія — спільна, тому й баф спільний: інакше вигідно було б «забирати» паси
+ * собі, а це рівно те, що цей режим має прибрати.
+ */
+function onPass(w, h) {
+  w.combo++;
+  if (w.combo > w.bestCombo) w.bestCombo = w.combo;
+  w.events.push({ type: 'pass', x: h.x, y: h.y, player: h.player, level: w.combo });
+
+  const tier = Math.floor(w.combo / TEAM.comboStep);
+  if (tier <= w.buffTier) return;
+  w.buffTier = tier;
+  const b = BUFFS[(tier - 1) % BUFFS.length];
+  const time = teamPerk(w, 'longBuff') ? TEAM.buffTimeLong : TEAM.buffTime;
+  if (b.id === 'speed') w.buff.speed = time;
+  else if (b.id === 'big') w.buff.size = time;
+  else for (const o of w.hands) { if (!o.out) o.shield = 1; }
+  w.events.push({ type: 'buff', x: WORLD.w / 2, y: 250, player: h.player, level: w.combo, buff: BUFFS.indexOf(b) });
+}
+
+/** Серія обривається разом із кулькою — і бафи за неї доживають самі. */
+function resetCombo(w) {
+  w.combo = 0;
+  w.buffTier = 0;
+  w.lastTapper = null;
+}
+
 /** Спільний шлях втрати сердець: і від падіння, і від шипа. */
 function loseLives(w, n) {
+  // У тім-апі спільного лічильника немає взагалі: серця живуть у руках. Тому
+  // будь-яка втрата — навіть не від падіння — мусить бути адресною, інакше
+  // вона списувала б порожнє `w.lives` і обривала партію при повних серцях.
+  if (w.team) { teamLose(w, balloonCenter(w.balloon).x, n); return; }
   w.lives = Math.max(0, w.lives - n);
   if (w.lives <= 0) {
     w.state = 'over';
@@ -676,7 +896,14 @@ function loseLives(w, n) {
     w.state = 'respawn';
     w.timer = RULES.respawnDelay;
   }
-  // Нова кулька прилітає надутою, а чайки й шипи починають відлік наново.
+  clearHazards(w);
+}
+
+/**
+ * Нова кулька прилітає надутою, а чайки, шипи й камінці починають відлік
+ * наново — інакше все це клювало б щойно відроджену кульку.
+ */
+function clearHazards(w) {
   w.deflate = 0;
   w.gull = null;
   w.gullTimer = gullPeriod(w);
@@ -685,6 +912,13 @@ function loseLives(w, n) {
   w.stones.length = 0;
   w.stoneTimer = STONE.maxGap;
   w.poops.length = 0;
+  if (!w.team) return;
+  // Пастки прибираємо теж, а разом з ними й павутину на руках: доганяти кульку
+  // з чужого падіння, сидячи приклеєним, було б покаранням ні за що.
+  w.traps.length = 0;
+  w.trapTimer = TRAP.minGap;
+  for (const h of w.hands) h.web = 0;
+  resetCombo(w);
 }
 
 /** Плавне здування після укусу і таке ж плавне повернення до норми. */
@@ -721,9 +955,20 @@ function moveHands(w, dt) {
   for (const h of w.hands) {
     h.px = h.x;
     h.py = h.y;
-    const n = advanceHand(h.x, h.y, h.tx, h.ty, dt, h.slow > 0, gloveAt(h.glove));
-    h.x = n.x;
-    h.y = n.y;
+    const kit = buffedKit(w, h);
+    // Розмір у тім-апі перераховуємо щокадру: баф «великі лапи» мусить міняти
+    // і те, чим б'єш, і те, що видно, — а не лише картинку.
+    if (w.team) h.r = HAND.r * kit.sizeMul;
+    // Павутина не просто забороняє бити — вона тримає на місці. Саме тому
+    // визволення сусідом щось важить: сам ти з неї не виберешся.
+    if (w.team && (h.web > 0 || h.out)) {
+      h.vx = 0; h.vy = 0;
+      h.tx = h.x; h.ty = h.y;
+    } else {
+      const n = advanceHand(h.x, h.y, h.tx, h.ty, dt, h.slow > 0, kit);
+      h.x = n.x;
+      h.y = n.y;
+    }
     h.vx = (h.x - h.px) / dt;
     h.vy = (h.y - h.py) / dt;
     const sp = Math.hypot(h.vx, h.vy);
@@ -739,7 +984,6 @@ function moveHands(w, dt) {
     // чайки. Відлік іде лише в живій грі — інакше вона просмерділась би, поки
     // кімната чекає на друзів. Поки лапа й так брудна, таймер стоїть: дві
     // брудноти поспіль нічого не додають, а мити треба однаково один раз.
-    const kit = kitOf(w, h);
     if (kit.stinkPeriod && !h.dirty && !w.paused && w.state === 'playing') {
       h.stink -= dt;
       if (h.stink <= 0) {
@@ -756,11 +1000,15 @@ function substep(w, h, alpha) {
   const pts = b.pts;
   const n = pts.length;
   const bio = biomeAt(w.level);
-  const R = rulesFor(w.hardcore);
+  const R = rulesFor(w.mode);
+  // Смола тім-апа: кулька в ній грузне — удари гаснуть майже одразу, і вибити
+  // її звідти можна хіба вбік. Тому це пастка по кульці, а не по гравцеві.
+  const tar = tarAt(w);
   let gravity = Math.min(BALLOON.gravity + w.score * R.gravityRamp, R.maxGravity);
   gravity *= skinAt(w.skin).gravityMul;    // синя кулька падає повільніше
   gravity *= bio.gravityMul;               // у космосі — майже невагомість
   if (w.deflate > 0) gravity *= GULL.gravityMul;
+  if (tar) gravity *= TRAP.tar.gravityMul;
   const sway = Math.sin(w.time * 0.7) * BALLOON.sway * bio.swayMul;
 
   // 1. Скидаємо сили, додаємо гравітацію та легкий протяг.
@@ -884,6 +1132,13 @@ function collideHands(w, alpha) {
 
   for (const hd of w.hands) {
     if (!hd.active) continue;
+    // Головне правило тім-апа. Той, хто щойно тапнув, стає БЕЗТІЛЕСНИЙ, поки
+    // кульку не зачепить хтось інший, — кулька просто пролітає крізь нього.
+    //
+    // Це єдиний чесний спосіб «не можна тапнути»: лишити руку перешкодою, але
+    // прибрати удар, вже пробували для кулдауну (див. README) — рука тягне за
+    // собою точки контакту, решта оболонки відстає, і кульку рве на шматки.
+    if (w.team && !canTap(w, hd)) { hd.touching = false; continue; }
     // Долоню рухаємо всередині підкроку — інакше швидкий ляпас проскакує оболонку.
     const hx = hd.px + (hd.x - hd.px) * alpha;
     const hy = hd.py + (hd.y - hd.py) * alpha;
@@ -954,6 +1209,7 @@ function collideHands(w, alpha) {
         const kit = kitOf(w, hd);
         let kick = (HAND.slapBase + Math.min(handSpeed, HAND.slapCap) * HAND.slapPerSpeed) * kit.slapMul;
         if (hd.dirty) kick *= POOP.slapMul;
+        if (tarAt(w)) kick *= TRAP.tar.slapMul;   // у смолі удар в'язне
         let dx, dy;
         if (handSpeed > 1) {
           dx = hd.vx / handSpeed;
@@ -976,10 +1232,10 @@ function collideHands(w, alpha) {
         // Шал не лише прибирає штраф — саме тому в ньому й зараховується
         // кожен удар підряд: `scores` дивиться на той самий `slow`.
         if (hd.rage <= 0) hd.slow = HAND.slowTime * skinAt(w.skin).slowMul;
-        // Колючки їжачка. Плата за найсильніший ляпас у грі: приблизно кожен
-        // 12-й удар лускає кульку. Рахуємо це саме на зарахованому ударі, а не
-        // на кожному дотику, — інакше кулька лускалась би просто від того, що
-        // персонаж її підпирає.
+        // Колючки їжачка — плата за удар без замаху. Заміряно на 1077 ударах:
+        // луснуло 101, тобто приблизно кожен одинадцятий. Шанс розігруємо саме
+        // на ЗАРАХОВАНОМУ ударі, а не на кожному дотику, — інакше кулька
+        // лускалась би просто від того, що персонаж її підпирає.
         if (scores && kit.popChance > 0 && Math.random() < kit.popChance) {
           w.events.push({ type: 'pop', x: acc.cx / acc.hits, y: acc.cy / acc.hits, player: hd.player });
           hd.touching = true;
@@ -987,8 +1243,14 @@ function collideHands(w, alpha) {
           return;   // кульки як цілі вже немає, решту рук цього підкроку не питаємо
         }
         if (scores) {
+          // Пас — це удар, перед яким бив ХТОСЬ ІНШИЙ. Перший удар після
+          // падіння пасом не рахується: передавати ще не було кому.
+          if (w.team) {
+            if (w.lastTapper !== null && w.lastTapper !== hd.id) onPass(w, hd);
+            w.lastTapper = hd.id;
+          }
           w.score++;
-          const lvl = levelInfo(w.score, w.hardcore).level;
+          const lvl = levelInfo(w.score, w.mode).level;
           if (lvl > w.level) {
             onLevelUp(w, lvl);
             w.events.push({ type: 'level', x: WORLD.w / 2, y: 220, player: hd.player, level: lvl, spikes: w.spikesOn });
@@ -1109,7 +1371,45 @@ function checkFloor(w) {
   if (maxY < FLOOR_Y) return;
 
   w.events.push({ type: 'drop', x: mx, y: FLOOR_Y, player: -1 });
-  loseLives(w, 1);
+  if (w.team) teamLose(w, mx);
+  else loseLives(w, 1);
+}
+
+/**
+ * Падіння в тім-апі. Серця тут особисті, тож і втрата мусить бути адресною —
+ * інакше «по три серця в кожного» нічого не означало б: усі втрачали б порівну
+ * і вибували б одночасно, тобто це були б ті самі спільні три серця.
+ *
+ * Винен той, хто МІГ бити (тобто не той, хто щойно пасував, і не той, хто сидить
+ * у павутині) і був найближче до місця падіння: саме він і мав рятувати.
+ */
+function teamLose(w, x, n = 1) {
+  const alive = w.hands.filter((h) => !h.out);
+  if (!alive.length) { w.state = 'over'; return; }
+
+  const able = alive.filter((h) => canTap(w, h));
+  const pool = able.length ? able : alive;
+  let who = pool[0];
+  let best = Infinity;
+  for (const h of pool) {
+    const d = Math.hypot(h.x - x, h.y - FLOOR_Y);
+    if (d < best) { best = d; who = h; }
+  }
+
+  who.lives = Math.max(0, who.lives - n);
+  w.events.push({ type: 'lose', x: who.x, y: who.y, player: who.player, level: who.lives });
+  if (who.lives <= 0 && !who.out) {
+    who.out = true;
+    w.events.push({ type: 'out', x: who.x, y: who.y, player: who.player });
+  }
+
+  if (w.hands.every((h) => h.out)) {
+    w.state = 'over';
+  } else {
+    w.state = 'respawn';
+    w.timer = rulesFor(w.mode).respawnDelay;
+  }
+  clearHazards(w);
 }
 
 export function restart(w) {
@@ -1123,8 +1423,14 @@ export function restart(w) {
   w.spikeTimer = SPIKE.minGap;
   w.stones.length = 0;
   w.stoneTimer = STONE.maxGap;
+  w.traps.length = 0;
+  w.trapTimer = TRAP.firstDelay;
+  w.buff.speed = 0;
+  w.buff.size = 0;
+  w.bestCombo = 0;
+  resetCombo(w);
   w.medkits = medkitsFor(w);
-  w.lives = rulesFor(w.hardcore).lives;
+  w.lives = rulesFor(w.mode).lives;
   w.state = 'playing';
   w.timer = 0;
   w.events.length = 0;
@@ -1134,6 +1440,7 @@ export function restart(w) {
   for (const h of w.hands) {
     h.touching = false; h.slow = 0; h.rage = 0; h.rages = RAGE.perLevel; h.dirty = false;
     h.stink = kitOf(w, h).stinkPeriod;
+    h.web = 0; h.shield = 0; h.out = false; h.lives = teamLives(h);
   }
 }
 

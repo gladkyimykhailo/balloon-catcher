@@ -90,6 +90,16 @@ export const sfx = {
   },
   // Сморід ванючки — низхідне «пфф».
   stink() { blip({ freq: 420, to: 110, dur: 0.45, type: 'sawtooth', gain: 0.1 }); },
+  // Пас: короткий висхідний «дзинь», і що довша серія, то вище — на слух чути,
+  // як росте комбо, не дивлячись на лічильник.
+  pass(k = 0) { blip({ freq: 520 + k * 520, to: 780 + k * 700, dur: 0.09, type: 'sine', gain: 0.1 }); },
+  // Пастка з'явилась — глухе «тук», щоб озирнутись.
+  trap() { blip({ freq: 200, to: 120, dur: 0.25, type: 'triangle', gain: 0.1 }); },
+  // Влип у павутину — липке низхідне.
+  web() {
+    blip({ freq: 700, to: 160, dur: 0.3, type: 'triangle', gain: 0.14 });
+    setTimeout(() => blip({ freq: 300, to: 120, dur: 0.3, type: 'sine', gain: 0.08 }), 90);
+  },
   drop() { blip({ freq: 320, to: 70, dur: 0.45, type: 'sawtooth', gain: 0.18 }); },
   over() { blip({ freq: 400, to: 60, dur: 0.9, type: 'square', gain: 0.14 }); },
   // Новий рівень — коротке висхідне арпеджіо.
