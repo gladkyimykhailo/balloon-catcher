@@ -1,5 +1,5 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import { WORLD, FLOOR_Y, BALLOON, PLAYER_COLORS, skinAt, gloveAt, biomeAt, bucketSpots } from '../shared/constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, bucketSpots } from '../shared/constants.js';
 
 const BAR_W = 360;
 const BAR_H = 24;
@@ -36,12 +36,15 @@ export class Renderer {
     this.gull = makeGullGraphic();
     this.gull.visible = false;
     this.spikesG = new Graphics();
+    this.stonesG = new Graphics();
     this.poopsG = new Graphics();
     this.shadowG = new Graphics();
     this.handLayer = new Container();
     this.fx = new Container();
     this.hud = new Container();
-    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.gull, this.handLayer, this.fx, this.hud);
+    // Камінці — над кулькою: вони падають на неї згори, і ховати їх за
+    // оболонкою означало б втратити саме той кадр, у якому ще можна відвести.
+    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.gull, this.handLayer, this.fx, this.hud);
 
     // Відблиск малюємо один раз в одиничних координатах і далі лише
     // масштабуємо/повертаємо — так він виглядає як нахилений полиск, а не як цифра.
@@ -230,15 +233,22 @@ export class Renderer {
 
   // -------------------------------------------------------------- долоні
 
-  ensureHand(id, player, isSelf, glove = 0) {
+  ensureHand(id, player, isSelf, glove = 0, char = 0, hardcore = false) {
     let h = this.hands.get(id);
-    // Перчатку можна змінити прямо в грі, тож графіку перемальовуємо, щойно
-    // скін іншим — інакше гравець бачив би стару руку до кінця партії.
-    if (h && h.glove === glove) return h;
+    // І перчатку, і персонажа можна змінити прямо в грі, тож графіку
+    // перемальовуємо, щойно вибір інший — інакше гравець бачив би стару руку
+    // до кінця партії. Ключ один на обидва режими.
+    const key = hardcore ? 'c' + char : 'g' + glove;
+    if (h && h.key === key) return h;
     if (h) h.view.destroy({ children: true });
-    const view = makeHandGraphic(PLAYER_COLORS[player % PLAYER_COLORS.length], isSelf, glove);
+    const color = PLAYER_COLORS[player % PLAYER_COLORS.length];
+    const view = hardcore ? makeCharGraphic(color, isSelf, char) : makeHandGraphic(color, isSelf, glove);
     this.handLayer.addChild(view);
-    h = { view, angle: h?.angle ?? 0, pop: 0, lx: h?.lx ?? null, ly: h?.ly ?? null, svx: 0, svy: 0, glove, base: gloveScale(glove) };
+    h = {
+      view, key, hardcore, angle: h?.angle ?? 0, pop: 0,
+      lx: h?.lx ?? null, ly: h?.ly ?? null, svx: 0, svy: 0,
+      base: hardcore ? charAt(char).sizeMul : gloveScale(glove),
+    };
     this.hands.set(id, h);
     return h;
   }
@@ -267,12 +277,13 @@ export class Renderer {
     this.drawShadow(view.points);
     this.drawGull(view.gull);
     this.drawSpikes(view.spikes, dt);
+    this.drawStones(view.stones, dt);
     this.drawPoops(view.poops);
 
     const alive = new Set();
     for (const hd of view.hands) {
       alive.add(hd.id);
-      const h = this.ensureHand(hd.id, hd.player, hd.self, hd.glove ?? 0);
+      const h = this.ensureHand(hd.id, hd.player, hd.self, hd.glove ?? 0, hd.char ?? 0, !!view.hardcore);
       if (h.lx === null) { h.lx = hd.x; h.ly = hd.y; h.view.position.set(hd.x, hd.y); }
       const vx = hd.x - h.lx;
       const vy = hd.y - h.ly;
@@ -290,7 +301,10 @@ export class Renderer {
       if (hd.flash > 0) h.pop = Math.max(h.pop, hd.flash);
       h.pop = Math.max(0, h.pop - dt * 3.2);
       h.view.position.set(hd.x, hd.y);
-      h.view.rotation = h.angle;
+      // Долоня «дивиться» туди, куди летить, а персонажа так крутити не можна:
+      // морда догори ногами читається як помилка, а не як замах. Тому йому
+      // лишаємо лише легкий нахил у бік руху.
+      h.view.rotation = h.hardcore ? h.angle * 0.3 : h.angle;
       const s = (1 + h.pop * 0.22) * h.base;
       h.view.scale.set(s, s * (1 - h.pop * 0.12));
       // Поки долоня обважніла після удару, вона бліда — видно, чому не встигає.
@@ -335,7 +349,10 @@ export class Renderer {
       this.barFill.roundRect(-BAR_W / 2 + 6, -BAR_H / 2 + 5, Math.max(0, w - 6), 5, 2.5)
         .fill({ color: 0xffffff, alpha: 0.45 });
     }
-    this.levelText.text = 'Рівень ' + li.level + (view.spikesOn ? ' ⚠' : '');
+    // У хардкорі шипи є завжди, тож ⚠ там нічого не повідомляє — його місце
+    // займає череп самого режиму.
+    this.levelText.text = (view.hardcore ? '☠ ' : '') + 'Рівень ' + li.level
+      + (view.spikesOn && !view.hardcore ? ' ⚠' : '');
     this.progText.text = li.progress + ' / ' + li.target;
     this.barPulse = Math.max(0, this.barPulse - dt * 2);
     this.levelBar.scale.set(1 + this.barPulse * 0.18);
@@ -381,6 +398,32 @@ export class Renderer {
       g.fill({ color: 0x4a5560, alpha: al }).stroke({ width: 3, color: 0x2b333b, alpha: al });
       g.moveTo(s.x - 2, s.y + 6 * d).lineTo(s.x - 9, s.y + 34 * d).lineTo(s.x - 6, s.y + 60 * d).lineTo(s.x - 2, s.y + 34 * d).closePath();
       g.fill({ color: 0xc6d2dc, alpha: 0.75 * al });
+    }
+  }
+
+  /**
+   * Камінці. Поки камінь висить угорі (фаза warn), під ним світиться стовп на
+   * всю висоту поля: гравець має бачити не сам камінь, а саме колонку, куди
+   * той упаде, — інакше «відвести кульку вбік» було б грою в здогадки.
+   */
+  drawStones(stones, dt) {
+    const g = this.stonesG;
+    g.clear();
+    if (!stones || !stones.length) return;
+    this.stoneT = (this.stoneT ?? 0) + dt;
+    const pulse = 0.55 + 0.45 * Math.sin(this.stoneT * 14);
+
+    for (const s of stones) {
+      if (!s.flying) {
+        g.rect(s.x - 30, CEIL_Y, 60, FLOOR_Y - CEIL_Y).fill({ color: 0xff4d4d, alpha: 0.06 + 0.07 * pulse });
+        g.moveTo(s.x - 20, CEIL_Y + 6).lineTo(s.x + 20, CEIL_Y + 6).lineTo(s.x, CEIL_Y + 40).closePath()
+          .fill({ color: 0xff4d4d, alpha: 0.35 + 0.45 * pulse });
+        drawRock(g, s.x, CEIL_Y + 16, STONE.r * 0.8, s.id, this.stoneT * 0.6, 0.55);
+        continue;
+      }
+      // Збитий камінь блідне — одразу видно, що він уже нікого не зачепить.
+      if (!s.dead) g.rect(s.x - 5, s.y - 74, 10, 70).fill({ color: 0xffffff, alpha: 0.14 });
+      drawRock(g, s.x, s.y, STONE.r, s.id, s.spin ?? 0, s.dead ? 0.45 : 1);
     }
   }
 
@@ -588,6 +631,118 @@ function makeHandGraphic(color, isSelf, gloveIndex = 0) {
 function gloveScale(i) {
   const g = gloveAt(i);
   return g.sizeMul * (g.id === 'light' ? 0.92 : 1);
+}
+
+// --------------------------------------------------- малювання камінця
+
+/**
+ * Камінь. Малюємо многокутник з нерівними вершинами, повернутий на `spin`:
+ * вершини рахуємо вручну, бо вся купа камінців живе в одному Graphics, який
+ * щокадру перемальовується (їх одиниці, це дешевше за контейнер на камінь).
+ * Форма береться з `id`, тож конкретний камінь не міняє силует у польоті.
+ */
+function drawRock(g, x, y, r, id, spin, alpha) {
+  const n = 7;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = spin + (i / n) * Math.PI * 2;
+    // Детермінована «шумілка» від id та номера вершини — без масиву випадкових
+    // чисел, які довелося б везти в снапшоті.
+    const k = 0.74 + (((id * 37 + i * 101) % 53) / 53) * 0.46;
+    pts.push({ x: x + Math.cos(a) * r * k, y: y + Math.sin(a) * r * k });
+  }
+  g.ellipse(x, y + r * 0.9, r * 0.9, r * 0.3).fill({ color: 0x000000, alpha: 0.12 * alpha });
+  g.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < n; i++) g.lineTo(pts[i].x, pts[i].y);
+  g.closePath();
+  g.fill({ color: 0x7b7166, alpha }).stroke({ width: 4, color: 0x463f38, alpha });
+  // Скол і блик — щоб камінь не читався як сірий м'яч.
+  g.moveTo(x - r * 0.45, y - r * 0.15).lineTo(x - r * 0.05, y - r * 0.55).lineTo(x + r * 0.2, y - r * 0.1)
+    .lineTo(x - r * 0.2, y + r * 0.2).closePath().fill({ color: 0x9a9086, alpha: 0.85 * alpha });
+  g.circle(x - r * 0.3, y - r * 0.35, r * 0.13).fill({ color: 0xd8d2c9, alpha: 0.7 * alpha });
+}
+
+// ------------------------------------------------- малювання персонажа
+
+/**
+ * Хардкор-персонаж. На відміну від перчатки, це морда, тож її не можна крутити
+ * за напрямком руху (див. `draw`) — упізнаваність тримається силуетом: вуха,
+ * ніс, колючки. Колір гравця виведено в нашийник і підкладку, як у манжеті
+ * долоні: у кімнаті до чотирьох гравців, і всі можуть бути тим самим звіром.
+ */
+function makeCharGraphic(color, isSelf, charIndex = 0) {
+  const ch = charAt(charIndex);
+  const c = new Container();
+  const g = new Graphics();
+  const dark = shade(color, -0.35);
+
+  // Підкладка кольором гравця: видно, чий це звір, навіть коли він за кулькою.
+  g.circle(0, 4, 56).fill({ color, alpha: 0.28 });
+
+  if (ch.id === 'hedgehog') {
+    // Колючки — по верхньому півколу, вістрями назовні.
+    for (let i = 0; i < 13; i++) {
+      const a = Math.PI + (i / 12) * Math.PI;
+      const inner = 30, outer = 60 + (i % 2) * 8;
+      const w = 0.11;
+      g.moveTo(Math.cos(a - w) * inner, Math.sin(a - w) * inner)
+        .lineTo(Math.cos(a) * outer, Math.sin(a) * outer)
+        .lineTo(Math.cos(a + w) * inner, Math.sin(a + w) * inner).closePath()
+        .fill(i % 2 ? 0x6b4a2f : 0x4e3520);
+    }
+    g.circle(0, 6, 36).fill(0xd7a86e).stroke({ width: 4, color: 0x8a6134 });
+    g.ellipse(0, 20, 17, 13).fill(0xf0d3ae);
+    g.circle(0, 27, 7).fill(0x2b2b2b);
+    g.circle(-13, 2, 5).circle(13, 2, 5).fill(0x2b2b2b);
+    g.circle(-15, 0, 2).circle(11, 0, 2).fill(0xffffff);
+  } else if (ch.id === 'skunk') {
+    // Ванючка — чорна з білою смугою вздовж морди, плюс хмарка смороду.
+    g.circle(-34, -30, 14).circle(34, -30, 14).fill(0x1d1d22).stroke({ width: 3, color: 0x000000 });
+    g.circle(0, 0, 46).fill(0x1d1d22).stroke({ width: 4, color: 0x000000 });
+    g.moveTo(-9, -46).lineTo(9, -46).lineTo(6, 34).lineTo(-6, 34).closePath().fill(0xf3f3ef);
+    g.ellipse(0, 26, 19, 14).fill(0xf3f3ef);
+    g.circle(0, 30, 7).fill(0xff8fb1);
+    g.circle(-17, -4, 6).circle(17, -4, 6).fill(0xffffff);
+    g.circle(-16, -3, 3).circle(18, -3, 3).fill(0x1d1d22);
+    for (let i = 0; i < 3; i++) {
+      g.circle(-46 - i * 9, -44 - i * 11, 10 - i * 2).fill({ color: 0x9ad36b, alpha: 0.4 - i * 0.1 });
+    }
+  } else if (ch.id === 'rat') {
+    // Пацюк — вуха більші за голову: маленького персонажа видно саме по них.
+    g.circle(-28, -28, 20).circle(28, -28, 20).fill(0x8d8d94).stroke({ width: 3, color: 0x5a5a61 });
+    g.circle(-28, -28, 11).circle(28, -28, 11).fill(0xffb3c7);
+    g.circle(0, 0, 34).fill(0x9a9aa2).stroke({ width: 4, color: 0x5a5a61 });
+    g.moveTo(-13, 12).lineTo(13, 12).lineTo(0, 40).closePath().fill(0xb7b7bd);
+    g.circle(0, 36, 6).fill(0xff8fb1);
+    g.circle(-13, -2, 5).circle(13, -2, 5).fill(0x23232a);
+    g.circle(-14, -3, 2).circle(12, -3, 2).fill(0xffffff);
+    for (const s of [-1, 1]) {
+      g.moveTo(s * 10, 26).lineTo(s * 46, 18).moveTo(s * 10, 30).lineTo(s * 48, 34)
+        .stroke({ width: 2.5, color: 0x5a5a61 });
+    }
+  } else {
+    // Єнот — маска на очах і смугастий силует: базовий, але не безликий.
+    g.moveTo(-42, -24).lineTo(-20, -52).lineTo(-6, -28).closePath()
+      .moveTo(42, -24).lineTo(20, -52).lineTo(6, -28).closePath()
+      .fill(0x6f7a85).stroke({ width: 3, color: 0x3f4952 });
+    g.circle(0, 0, 44).fill(0x9aa6b2).stroke({ width: 4, color: 0x3f4952 });
+    g.roundRect(-40, -14, 80, 26, 13).fill(0x2f3942);
+    g.circle(-16, -1, 7).circle(16, -1, 7).fill(0xffffff);
+    g.circle(-15, -1, 3.5).circle(17, -1, 3.5).fill(0x1d232a);
+    g.ellipse(0, 24, 21, 15).fill(0xe8eef3);
+    g.circle(0, 20, 7).fill(0x2f3942);
+  }
+
+  // Нашийник у кольорі гравця — той самий прийом, що й манжет у долоні.
+  g.roundRect(-40, 40, 80, 22, 11).fill(color).stroke({ width: 4, color: dark });
+  c.addChild(g);
+
+  if (isSelf) {
+    const ring = new Graphics();
+    ring.circle(0, 0, 70).stroke({ width: 4, color: 0xffffff, alpha: 0.55 });
+    c.addChildAt(ring, 0);
+  }
+  return c;
 }
 
 // --------------------------------------------------------------- утиліти

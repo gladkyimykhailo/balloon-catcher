@@ -15,19 +15,25 @@ export class Net {
     this.peers = 1;
     this.maxLives = 3;
     this.maxPlayers = 4;
+    this.hardcore = false;    // режим кімнати; його вирішує сервер, а не клієнт
     this.offset = null;       // різниця годинників клієнта і сервера
     this.onEvent = () => {};
     this.onStatus = () => {};
     this.onError = () => {};
   }
 
-  connect(url, room) {
+  /**
+   * `hardcore` — це лише побажання на випадок, коли кімната створюється зараз.
+   * Якщо кімната вже існує, діє ЇЇ режим: два гравці в одній кімнаті не можуть
+   * грати в різні ігри, бо світ у них один. Сервер відповість, що вийшло.
+   */
+  connect(url, room, hardcore = false) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       this.ws = ws;
       let settled = false;
 
-      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '' }));
+      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '', hc: hardcore ? 1 : 0 }));
 
       ws.onmessage = (e) => {
         const m = JSON.parse(e.data);
@@ -36,6 +42,7 @@ export class Net {
           this.room = m.room;
           this.maxLives = m.maxLives;
           this.maxPlayers = m.maxPlayers ?? 4;
+          this.hardcore = !!m.hc;
           settled = true;
           resolve(m);
         } else if (m.t === 'snap') {
@@ -94,6 +101,11 @@ export class Net {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'glove', i }));
   }
 
+  /** Хардкор-персонаж — річ особиста, як і перчатка. */
+  setChar(i) {
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'char', i }));
+  }
+
   rage() {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'rage' }));
   }
@@ -129,6 +141,7 @@ export class Net {
         x: ha[1] + (hb[1] - ha[1]) * k, y: ha[2] + (hb[2] - ha[2]) * k,
         flash: hb[3], slow: hb[4] ?? 0,
         glove: hb[5] ?? 0, rage: hb[6] ?? 0, rages: hb[7] ?? 0, dirty: hb[8] === 1,
+        char: hb[9] ?? 0,
       };
     });
 
@@ -163,9 +176,24 @@ export class Net {
       };
     });
 
+    // Камінці падають ще швидше за шипи, тож інтерполюємо їх так само за id.
+    // Кут обертання не інтерполюємо: камінь крутиться і так, а стрибок на
+    // кадрі між снапшотами на око не читається.
+    const stones = (b.sn ?? []).map((sb) => {
+      const sa = (a.sn ?? []).find((x) => x[0] === sb[0]);
+      return {
+        id: sb[0],
+        x: sa ? sa[1] + (sb[1] - sa[1]) * k : sb[1],
+        y: sa ? sa[2] + (sb[2] - sa[2]) * k : sb[2],
+        flying: sb[3] === 1,
+        dead: sb[4] === 1,
+        spin: sb[5] / 100,
+      };
+    });
+
     return {
-      points, hands, gull, spikes, poops,
-      deflate: b.df ?? 0, spikesOn: !!b.so,
+      points, hands, gull, spikes, poops, stones,
+      deflate: b.df ?? 0, spikesOn: !!b.so, hardcore: !!b.hc,
       score: b.sc, lives: b.lv, state: b.st,
       medkits: b.mk ?? 0, skin: b.sk ?? 0,
     };

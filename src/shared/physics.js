@@ -6,33 +6,45 @@
 //      стискаєш кульку -> площа падає -> тиск росте -> вона випинається деінде.
 // Саме тому вона мнеться від долоні, а потім пружно вистрілює назад.
 
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, skinAt, gloveAt, biomeAt, bucketSpots } from './constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, skinAt, gloveAt, handKit, biomeAt, bucketSpots, rulesFor } from './constants.js';
 
 const TAU = Math.PI * 2;
 
-/** Скільки влучань потрібно на рівні `n` (1-based). */
-export function levelTarget(n) {
-  return Math.round((LEVELS.first * Math.pow(LEVELS.growth, n - 1)) / 5) * 5;
+/**
+ * Скільки влучань потрібно на рівні `n` (1-based).
+ * У хардкорі рівні вдвічі коротші: 50 влучань із двома серцями під камінням —
+ * це не рівень, а вечір, і черепи за нього чекали б надто довго.
+ */
+export function levelTarget(n, hardcore = false) {
+  const base = LEVELS.first * Math.pow(LEVELS.growth, n - 1) * (hardcore ? HARDCORE.levelScale : 1);
+  return Math.max(5, Math.round(base / 5) * 5);
 }
 
 /**
  * Рівень, прогрес і ціль — чиста функція від загального рахунку.
  * Завдяки цьому клієнту в мультиплеєрі досить самого рахунку зі снапшота.
  */
-export function levelInfo(score) {
+export function levelInfo(score, hardcore = false) {
   let level = 1;
   let base = 0;
-  let target = levelTarget(1);
+  let target = levelTarget(1, hardcore);
   while (score - base >= target) {
     base += target;
     level++;
-    target = levelTarget(level);
+    target = levelTarget(level, hardcore);
   }
   return { level, progress: score - base, target };
 }
 
-export function createWorld() {
+/**
+ * Новий світ. `hardcore` — не рівень складності, а окремий режим: свої серця,
+ * свої рівні, камінці з неба і персонажі замість перчаток. Прапорець живе саме
+ * у світі, бо все це має бути однаковим для всіх, хто грає в цій кімнаті.
+ */
+export function createWorld(hardcore = false) {
+  const R = rulesFor(hardcore);
   const w = {
+    hardcore: !!hardcore,
     time: 0,
     tick: 0,
     balloon: null,
@@ -40,17 +52,20 @@ export function createWorld() {
     score: 0,
     level: 1,
     gull: null,          // чайка в польоті
-    gullTimer: GULL.period,
+    gullTimer: hardcore ? HARDCORE.gullPeriod : GULL.period,
     deflate: 0,          // скільки секунд кулька ще здута
     spikes: [],          // шипи в польоті або на попередженні
-    spikesOn: false,     // чи випав поточному рівню «шиповий» жереб
+    spikesOn: !!hardcore,  // чи випав поточному рівню «шиповий» жереб (у хардкорі — завжди)
     spikeTimer: 0,
     spikeSeq: 0,
     poops: [],           // те, що падає з чайки
     poopSeq: 0,
-    medkits: MEDKIT.perLevel,   // заряди аптечки, спільні на всіх гравців
+    stones: [],          // камінці: хардкорна загроза згори
+    stoneSeq: 0,
+    stoneTimer: STONE.maxGap,
+    medkits: hardcore ? HARDCORE.medkits : MEDKIT.perLevel,   // заряди аптечки, спільні на всіх гравців
     skin: 0,             // скін кульки; від нього залежать здібності нижче
-    lives: RULES.lives,
+    lives: R.lives,
     paused: false,         // напр., чекаємо, поки приєднається другий гравець
     state: 'playing',      // playing | respawn | over
     timer: 0,
@@ -108,7 +123,7 @@ export function spawnBalloon(w, cx, cy) {
   return w.balloon;
 }
 
-export function addHand(w, id, player, glove = 0) {
+export function addHand(w, id, player, glove = 0, char = 0) {
   const h = {
     id, player,
     x: WORLD.w / 2, y: WORLD.h - 180,
@@ -121,13 +136,49 @@ export function addHand(w, id, player, glove = 0) {
     slow: 0,          // скільки секунд долоня ще обважніла після удару
     flash: 0,
     glove: 0,         // скін перчатки; на відміну від кульки, він особистий
+    char: 0,          // хардкор-персонаж — теж особистий, діє замість перчатки
+    stink: 0,         // ванючці лишилось стільки секунд до наступного смороду
     rage: 0,          // скільки секунд ще триває шалений режим
     rages: RAGE.perLevel,
     dirty: false,     // чайка влучила: кулька ковзає, очки не йдуть
   };
-  setGlove(w, id, glove, h);
+  h.glove = clampIndex(glove);
+  h.char = clampIndex(char);
+  applyKit(w, h);
   w.hands.push(h);
   return h;
+}
+
+/**
+ * Чим цей гравець б'є кульку прямо зараз: перчаткою чи хардкор-персонажем.
+ * Уся фізика нижче питає саме кит, тому їй байдуже, який зараз режим.
+ */
+function kitOf(w, h) {
+  return handKit(w.hardcore, h.glove, h.char);
+}
+
+/**
+ * Розмір руки беремо тут раз і назавжди, щоб фізика зіткнень далі просто
+ * читала `h.r` і нічого не знала ні про перчатки, ні про персонажів.
+ */
+function applyKit(w, h) {
+  const kit = kitOf(w, h);
+  h.r = HAND.r * kit.sizeMul;
+  if (!kit.rage) h.rage = 0;         // не боксерська — шал гасне
+  h.stink = kit.stinkPeriod;         // ванючці — відлік до першого смороду
+  return kit;
+}
+
+function clampIndex(i) {
+  return Math.max(0, Math.min(i | 0, 99));
+}
+
+/** Хардкор-персонаж. Річ особиста, як і перчатка, тож міняється в одній руці. */
+export function setChar(w, id, i, hand = null) {
+  const h = hand ?? getHand(w, id);
+  if (!h) return;
+  h.char = clampIndex(i);
+  applyKit(w, h);
 }
 
 /**
@@ -137,9 +188,8 @@ export function addHand(w, id, player, glove = 0) {
 export function setGlove(w, id, i, hand = null) {
   const h = hand ?? getHand(w, id);
   if (!h) return;
-  h.glove = Math.max(0, Math.min(i | 0, 99));
-  h.r = HAND.r * gloveAt(h.glove).sizeMul;
-  if (!gloveAt(h.glove).rage) h.rage = 0;   // не боксерська — шал гасне
+  h.glove = clampIndex(i);
+  applyKit(w, h);
 }
 
 /**
@@ -149,7 +199,7 @@ export function setGlove(w, id, i, hand = null) {
 export function useRage(w, handId) {
   if (w.state === 'over') return null;
   const h = getHand(w, handId);
-  if (!h || !gloveAt(h.glove).rage) return null;
+  if (!h || !kitOf(w, h).rage) return null;
   if (h.rages <= 0 || h.rage > 0) return null;   // під час шалу другий заряд не палимо
   h.rages--;
   h.rage = RAGE.time;
@@ -194,6 +244,7 @@ export function step(w, dt) {
   updatePoops(w, dt);
   updateWashing(w);
   updateSpikes(w, dt);
+  updateStones(w, dt);
   updateInflation(w, dt);
 
   if (w.state === 'respawn') {
@@ -210,6 +261,11 @@ export function step(w, dt) {
   for (let s = 0; s < SUBSTEPS; s++) {
     // Долоню рухаємо всередині підкроків теж — інакше швидкий ляпас "протикає" оболонку.
     substep(w, h, (s + 1) / SUBSTEPS);
+    // Колючки їжачка лускають кульку прямо в момент удару, тобто посеред
+    // підкроків. Далі крутити фізику вже нічого: кульки як цілі більше нема,
+    // а checkFloor унизу зарахував би ще й падіння — тобто друге серце за одну
+    // й ту саму смерть.
+    if (w.state !== 'playing') return;
   }
 
   checkFloor(w);
@@ -230,8 +286,10 @@ function updateGull(w, dt) {
     if (w.gullTimer > 0) return;
     // Уночі чайки сплять. Ту, що вже летить, не чіпаємо — хай долітає,
     // інакше птаха зникала б просто в повітрі на переході рівня.
-    if (!biomeAt(w.level).gulls) { w.gullTimer = GULL.period; return; }
-    w.gullTimer = GULL.period;
+    // Ванючка проганяє їх так само надійно, як ніч — саме за це її й купують.
+    const period = gullPeriod(w);
+    if (!biomeAt(w.level).gulls || stinksInRoom(w)) { w.gullTimer = period; return; }
+    w.gullTimer = period;
     const fromLeft = Math.random() < 0.5;
     w.gull = {
       x: fromLeft ? -90 : WORLD.w + 90,
@@ -251,6 +309,7 @@ function updateGull(w, dt) {
 
   const g = w.gull;
   g.flap += dt * 11;
+
 
   // Какає будь-де над полем — і полюючи, і відлітаючи.
   if (g.poopsLeft > 0 && g.x > 0 && g.x < WORLD.w) {
@@ -301,6 +360,25 @@ function updateGull(w, dt) {
   }
 }
 
+/** Як часто прилітають чайки: у хардкорі майже вдвічі частіше. */
+function gullPeriod(w) {
+  return w.hardcore ? HARDCORE.gullPeriod : GULL.period;
+}
+
+/**
+ * Чи є в кімнаті ванючка. Сморід — річ спільна на все поле, тож досить одного
+ * такого гравця, щоб чайки не прилітали до всіх: інакше в мультиплеєрі птаха
+ * мала б якось «вибирати», кого вона бачить.
+ */
+function stinksInRoom(w) {
+  return w.hands.some((h) => h.active && kitOf(w, h).noGulls);
+}
+
+/** Скільки зарядів аптечки видається на рівень. */
+function medkitsFor(w) {
+  return w.hardcore ? HARDCORE.medkits : MEDKIT.perLevel;
+}
+
 /**
  * Новий рівень: жереб на шипи і свіжі заряди аптечки.
  * Заряди саме видаються наново, а не додаються — інакше обережний гравець
@@ -308,7 +386,7 @@ function updateGull(w, dt) {
  */
 function onLevelUp(w, lvl) {
   w.level = lvl;
-  w.medkits = MEDKIT.perLevel;
+  w.medkits = medkitsFor(w);
   for (const h of w.hands) h.rages = RAGE.perLevel;
   rollSpikes(w);
 }
@@ -331,12 +409,12 @@ function onLevelUp(w, lvl) {
 export function useMedkit(w, handId = null) {
   if (w.state === 'over' || w.medkits <= 0) return null;
   const hands = handId ? w.hands.filter((h) => h.id === handId) : w.hands;
-  const canHeal = w.lives < RULES.lives;
+  const canHeal = w.lives < rulesFor(w.hardcore).lives;
   const canFreshen = hands.some((h) => h.slow > 0);
   if (!canHeal && !canFreshen) return null;
 
   w.medkits--;
-  if (canHeal) w.lives = Math.min(RULES.lives, w.lives + MEDKIT.heal);
+  if (canHeal) w.lives = Math.min(rulesFor(w.hardcore).lives, w.lives + MEDKIT.heal);
   for (const h of hands) h.slow = 0;
   return { type: 'heal', x: WORLD.w / 2, y: 230, player: -1, level: w.medkits, healed: canHeal };
 }
@@ -392,7 +470,8 @@ function updateWashing(w) {
 
 /** Кидає жереб, чи буде поточний рівень із шипами. */
 function rollSpikes(w) {
-  w.spikesOn = w.level >= SPIKE.firstLevel && Math.random() < SPIKE.levelChance;
+  // У хардкорі жереба немає: шипи є на кожному рівні, включно з першим.
+  w.spikesOn = w.hardcore || (w.level >= SPIKE.firstLevel && Math.random() < SPIKE.levelChance);
   w.spikes.length = 0;
   w.spikeTimer = SPIKE.minGap;
 }
@@ -432,8 +511,9 @@ function updateSpikes(w, dt) {
     const hd = handAtSpike(w, s, dt);
     if (hd) {
       s.phase = 'fall';
-      // У шаленому режимі рука не втомлюється зовсім — ні від кульки, ні від шипа.
-      if (hd.rage <= 0) hd.slow = HAND.slowTime * skinAt(w.skin).slowMul;
+      // У шаленому режимі рука не втомлюється зовсім — ні від кульки, ні від
+      // шипа. Їжачок теж: колючками він збиває залізо, не втомлюючись.
+      if (hd.rage <= 0 && !kitOf(w, hd).toughParry) hd.slow = HAND.slowTime * skinAt(w.skin).slowMul;
       w.events.push({ type: 'parry', x: s.x, y: s.y, player: hd.player });
       continue;
     }
@@ -464,11 +544,13 @@ function updateSpikes(w, dt) {
  * пройшло за цей кадр: інакше шип «перестрибував» би долоню.
  */
 function handAtSpike(w, s, dt) {
-  const reach = HAND.r + SPIKE.parryRadius;
   const from = { x: s.x, y: s.y + SPIKE.speed * dt };
   const to = { x: s.x, y: s.y };
   for (const hd of w.hands) {
     if (!hd.active) continue;
+    // Радіус беремо від самої руки, а не від HAND.r: воротарська перчатка й
+    // маленький пацюк мусять відбивати рівно тим, що видно на екрані.
+    const reach = hd.r + SPIKE.parryRadius + kitOf(w, hd).parryBonus;
     const [d] = segDist(from, to, hd.x, hd.y);
     if (d < reach) return hd;
   }
@@ -479,6 +561,108 @@ function spikeHitsBalloon(b, x, y) {
   if (pointInPolygon(x, y, b.pts)) return true;
   for (const p of b.pts) {
     if (Math.hypot(p.x - x, p.y - y) < SPIKE.hitRadius) return true;
+  }
+  return false;
+}
+
+/**
+ * Камінці — головна хардкор-загроза, і навмисно дзеркальна до шипів: шип летить
+ * з підлоги вгору, камінь падає з неба вниз. Тобто небезпечним стає той самий
+ * простір над кулькою, куди гравець і б'є, — доводиться вибирати між ударом і
+ * ухилянням, а не просто молотити знизу.
+ *
+ * Попередження є й тут: камінь спершу висить угорі (фаза warn) рівно там, де
+ * почне падати. Хардкор має бути важким, а не підступним.
+ */
+function updateStones(w, dt) {
+  if (!w.hardcore || w.state !== 'playing') return;
+
+  for (let i = w.stones.length - 1; i >= 0; i--) {
+    const s = w.stones[i];
+
+    if (s.phase === 'warn') {
+      s.t -= dt;
+      if (s.t <= 0) { s.phase = 'fall'; w.events.push({ type: 'stoneDrop', x: s.x, y: s.y, player: -1 }); }
+      continue;
+    }
+
+    const px = s.x;
+    const py = s.y;
+    s.vy += STONE.gravity * dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.spin += (s.vx >= 0 ? 1 : -1) * dt * 5;
+
+    if (s.y > WORLD.h + 120 || s.x < -120 || s.x > WORLD.w + 120) { w.stones.splice(i, 1); continue; }
+
+    // Збитий камінь уже нікому не шкодить — просто дофутболюється за край.
+    if (!s.dead) {
+      // Порядок той самий, що й у шипа: спершу рука, потім кулька. Камінь, що
+      // за один крок проходить крізь персонажа в кульку, має бути збитий.
+      const hd = handAtStone(w, s, px, py);
+      if (hd) {
+        s.dead = true;
+        const sp = Math.hypot(hd.vx, hd.vy);
+        // Летить туди, куди його вдарили; від нерухомої руки — просто вбік і вгору.
+        s.vx = (sp > 1 ? hd.vx / sp : (s.x < WORLD.w / 2 ? -1 : 1)) * STONE.parryKick;
+        s.vy = -Math.abs(STONE.parryKick * 0.6);
+        if (hd.rage <= 0 && !kitOf(w, hd).toughParry) hd.slow = HAND.slowTime * skinAt(w.skin).slowMul;
+        w.events.push({ type: 'stoneParry', x: s.x, y: s.y, player: hd.player });
+        continue;
+      }
+
+      if (stoneHitsBalloon(w.balloon, s.x, s.y)) {
+        w.events.push({ type: 'stone', x: s.x, y: s.y, player: -1 });
+        loseLives(w, STONE.livesCost);
+        return;   // кулька вже відроджується, решту камінців прибрано
+      }
+    }
+
+    if (s.y > FLOOR_Y - STONE.r) {
+      w.events.push({ type: 'thud', x: s.x, y: FLOOR_Y, player: -1 });
+      w.stones.splice(i, 1);
+    }
+  }
+
+  w.stoneTimer -= dt;
+  if (w.stoneTimer > 0) return;
+  w.stoneTimer = STONE.minGap + Math.random() * (STONE.maxGap - STONE.minGap);
+
+  // Цілимось приблизно над кулькою — з розкидом, як і шипи: камінь майже завжди
+  // справжня загроза, але кульку встигаєш відвести вбік.
+  const c = balloonCenter(w.balloon);
+  const x = clamp(c.x + (Math.random() - 0.5) * STONE.spread, 50, WORLD.w - 50);
+  w.stones.push({
+    id: ++w.stoneSeq,
+    x, y: CEIL_Y + STONE.r + 6,
+    vx: (Math.random() - 0.5) * STONE.drift, vy: 0,
+    spin: Math.random() * 6.3,
+    phase: 'warn', t: STONE.warn, dead: false,
+  });
+  w.events.push({ type: 'stoneWarn', x, y: CEIL_Y, player: -1 });
+}
+
+/**
+ * Персонаж, який збив камінь. Камінь розганяється до 600+ px/с, тобто до 10 px
+ * за кадр, тому перевіряємо весь відрізок його шляху за цей кадр, а не саму
+ * точку — інакше він просто перестрибував би руку.
+ */
+function handAtStone(w, s, px, py) {
+  const from = { x: px, y: py };
+  const to = { x: s.x, y: s.y };
+  for (const hd of w.hands) {
+    if (!hd.active) continue;
+    const reach = hd.r + STONE.parryRadius + kitOf(w, hd).parryBonus;
+    const [d] = segDist(from, to, hd.x, hd.y);
+    if (d < reach) return hd;
+  }
+  return null;
+}
+
+function stoneHitsBalloon(b, x, y) {
+  if (pointInPolygon(x, y, b.pts)) return true;
+  for (const p of b.pts) {
+    if (Math.hypot(p.x - x, p.y - y) < STONE.hitRadius) return true;
   }
   return false;
 }
@@ -495,9 +679,11 @@ function loseLives(w, n) {
   // Нова кулька прилітає надутою, а чайки й шипи починають відлік наново.
   w.deflate = 0;
   w.gull = null;
-  w.gullTimer = GULL.period;
+  w.gullTimer = gullPeriod(w);
   w.spikes.length = 0;
   w.spikeTimer = SPIKE.minGap;
+  w.stones.length = 0;
+  w.stoneTimer = STONE.maxGap;
   w.poops.length = 0;
 }
 
@@ -548,6 +734,20 @@ function moveHands(w, dt) {
     if (h.slow > 0) h.slow = Math.max(0, h.slow - dt);
     if (h.rage > 0) h.rage = Math.max(0, h.rage - dt);
     if (h.flash > 0) h.flash -= dt * 3;
+
+    // Ванючка смердить сама по собі: раз на stinkPeriod лапа брудніє без жодної
+    // чайки. Відлік іде лише в живій грі — інакше вона просмерділась би, поки
+    // кімната чекає на друзів. Поки лапа й так брудна, таймер стоїть: дві
+    // брудноти поспіль нічого не додають, а мити треба однаково один раз.
+    const kit = kitOf(w, h);
+    if (kit.stinkPeriod && !h.dirty && !w.paused && w.state === 'playing') {
+      h.stink -= dt;
+      if (h.stink <= 0) {
+        h.stink = kit.stinkPeriod;
+        h.dirty = true;
+        w.events.push({ type: 'stink', x: h.x, y: h.y, player: h.player });
+      }
+    }
   }
 }
 
@@ -556,7 +756,8 @@ function substep(w, h, alpha) {
   const pts = b.pts;
   const n = pts.length;
   const bio = biomeAt(w.level);
-  let gravity = Math.min(BALLOON.gravity + w.score * RULES.gravityRamp, RULES.maxGravity);
+  const R = rulesFor(w.hardcore);
+  let gravity = Math.min(BALLOON.gravity + w.score * R.gravityRamp, R.maxGravity);
   gravity *= skinAt(w.skin).gravityMul;    // синя кулька падає повільніше
   gravity *= bio.gravityMul;               // у космосі — майже невагомість
   if (w.deflate > 0) gravity *= GULL.gravityMul;
@@ -748,8 +949,10 @@ function collideHands(w, alpha) {
         // Швидкість долоні додаємо ВСІЙ кульці однаково: спільний зсув швидкості
         // не змінює взаємних швидкостей точок, тож оболонку таким поштовхом
         // не розірве, хай яким сильним буде удар.
-        // З брудної долоні кулька ковзає — удар виходить утричі слабший.
-        let kick = HAND.slapBase + Math.min(handSpeed, HAND.slapCap) * HAND.slapPerSpeed;
+        // З брудної долоні кулька ковзає — удар виходить утричі слабший,
+        // а їжачок, навпаки, б'є помітно сильніше за всіх.
+        const kit = kitOf(w, hd);
+        let kick = (HAND.slapBase + Math.min(handSpeed, HAND.slapCap) * HAND.slapPerSpeed) * kit.slapMul;
         if (hd.dirty) kick *= POOP.slapMul;
         let dx, dy;
         if (handSpeed > 1) {
@@ -773,9 +976,19 @@ function collideHands(w, alpha) {
         // Шал не лише прибирає штраф — саме тому в ньому й зараховується
         // кожен удар підряд: `scores` дивиться на той самий `slow`.
         if (hd.rage <= 0) hd.slow = HAND.slowTime * skinAt(w.skin).slowMul;
+        // Колючки їжачка. Плата за найсильніший ляпас у грі: приблизно кожен
+        // 12-й удар лускає кульку. Рахуємо це саме на зарахованому ударі, а не
+        // на кожному дотику, — інакше кулька лускалась би просто від того, що
+        // персонаж її підпирає.
+        if (scores && kit.popChance > 0 && Math.random() < kit.popChance) {
+          w.events.push({ type: 'pop', x: acc.cx / acc.hits, y: acc.cy / acc.hits, player: hd.player });
+          hd.touching = true;
+          loseLives(w, 1);
+          return;   // кульки як цілі вже немає, решту рук цього підкроку не питаємо
+        }
         if (scores) {
           w.score++;
-          const lvl = levelInfo(w.score).level;
+          const lvl = levelInfo(w.score, w.hardcore).level;
           if (lvl > w.level) {
             onLevelUp(w, lvl);
             w.events.push({ type: 'level', x: WORLD.w / 2, y: 220, player: hd.player, level: lvl, spikes: w.spikesOn });
@@ -903,19 +1116,25 @@ export function restart(w) {
   w.score = 0;
   w.level = 1;
   w.gull = null;
-  w.gullTimer = GULL.period;
+  w.gullTimer = gullPeriod(w);
   w.deflate = 0;
   w.spikes.length = 0;
   w.spikesOn = false;
   w.spikeTimer = SPIKE.minGap;
-  w.medkits = MEDKIT.perLevel;
-  w.lives = RULES.lives;
+  w.stones.length = 0;
+  w.stoneTimer = STONE.maxGap;
+  w.medkits = medkitsFor(w);
+  w.lives = rulesFor(w.hardcore).lives;
   w.state = 'playing';
   w.timer = 0;
   w.events.length = 0;
   spawnBalloon(w, WORLD.w / 2, 220);
   w.poops.length = 0;
-  for (const h of w.hands) { h.touching = false; h.slow = 0; h.rage = 0; h.rages = RAGE.perLevel; h.dirty = false; }
+  rollSpikes(w);   // у хардкорі шипи є вже на першому рівні, тож жереб — одразу
+  for (const h of w.hands) {
+    h.touching = false; h.slow = 0; h.rage = 0; h.rages = RAGE.perLevel; h.dirty = false;
+    h.stink = kitOf(w, h).stinkPeriod;
+  }
 }
 
 // -------------------------------------------------------------- допоміжне

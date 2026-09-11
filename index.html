@@ -69,15 +69,31 @@
   .skin[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.08); }
   #wallet { font-size: 15px; opacity: .8; margin-top: 6px; }
   #coins { color: #d98a00; }
+  #skulls { color: #6b4a8f; }
   #coins-hud { background: rgba(255,255,255,.85); border-radius: 14px; padding: 10px 14px;
     font-weight: 900; color: #d98a00; }
+  #skulls-hud { background: #221a2e; border-radius: 14px; padding: 10px 14px;
+    font-weight: 900; color: #d3b6ff; }
   /* Комірка магазину: кружечок і ціна під ним. */
   .pick { display: flex; flex-direction: column; align-items: center; gap: 3px; }
   .price { font-size: 12px; font-weight: 800; color: #d98a00; min-height: 15px; }
   .skin.locked { filter: grayscale(.75); opacity: .5; }
-  #skin-name, #glove-name { font-weight: 900; }
-  #skin-ability, #glove-ability { display: block; font-size: 14px; opacity: .75; margin-top: 2px; min-height: 34px; }
-  #skin-ability.warn, #glove-ability.warn { color: #d63a51; opacity: 1; font-weight: 800; }
+  #skin-name, #glove-name, #char-name { font-weight: 900; }
+  #skin-ability, #glove-ability, #char-ability { display: block; font-size: 14px; opacity: .75; margin-top: 2px; min-height: 34px; }
+  #skin-ability.warn, #glove-ability.warn, #char-ability.warn { color: #d63a51; opacity: 1; font-weight: 800; }
+
+  /* Хардкор — окремий режим, а не галочка складності, тож і в меню він живе
+     власним темним островом: видно з першого погляду, що це інша гра. */
+  #hardcore { background: #221a2e; color: #efe7fb; border-radius: 22px;
+    margin: 18px -10px 4px; padding: 14px 16px 18px; }
+  #hardcore .divider { color: #b9a6d8; margin-top: 4px; }
+  #hardcore .sub { color: #cdbde8; opacity: .85; margin-bottom: 12px; font-size: 14px; }
+  #hardcore .price { color: #d3b6ff; }
+  #hardcore .skin[aria-pressed="true"] { border-color: #efe7fb; }
+  #chars { display: flex; gap: 10px; justify-content: center; margin: 4px 0 10px; }
+  #char-ability { opacity: .85; }
+  button.dark { background: #6b4a8f; }
+  button.dark:hover { filter: brightness(1.2); }
 
   /* Аптечка. Внизу зліва: там не літає ні кулька, ні долоні, і великою
      кнопкою зручно влучити пальцем на планшеті. */
@@ -117,7 +133,7 @@
       <p class="sub">Бий долонею знизу, щоб кулька не торкнулась підлоги.<br />
         Шипи можна відбивати рукою, аптечка (H) повертає серце, а боксерська перчатка
         вмикає шал (B) — 5 секунд без кулдауну</p>
-      <div id="wallet">Твої монети: <b id="coins">🪙 0</b></div>
+      <div id="wallet">Твої монети: <b id="coins">🪙 0</b> · черепи хардкора: <b id="skulls">☠ 0</b></div>
       <div class="divider">магазин · скін кульки</div>
       <div id="skins"></div>
       <div id="skin-pick"><span id="skin-name"></span><span id="skin-ability"></span></div>
@@ -128,6 +144,22 @@
         <button id="btn-solo">👋 Грати одному</button>
         <button id="btn-local2" class="blue">👋👋 Вдвох за одним комп'ютером</button>
       </div>
+      <div id="hardcore">
+        <div class="divider">☠ хардкор</div>
+        <p class="sub">Два серця замість трьох, шипи на кожному рівні й камінці з неба.
+          Замість долоні — персонаж зі своєю здібністю і своїм мінусом.
+          За кожен пройдений хардкор-рівень дають черепи ☠ — інша валюта, і купуються за неї лише персонажі.</p>
+        <div id="chars"></div>
+        <div id="char-pick"><span id="char-name"></span><span id="char-ability"></span></div>
+        <div class="stack">
+          <div class="row">
+            <button id="btn-hc" class="dark">☠ Одному</button>
+            <button id="btn-hc2" class="dark">☠ Удвох</button>
+          </div>
+          <button id="btn-hc-host" class="dark">☠ Хардкор-кімната для друзів</button>
+        </div>
+      </div>
+
       <div class="divider">мультиплеєр — до 4 гравців</div>
       <div class="stack">
         <button id="btn-host" class="ghost">Створити кімнату</button>
@@ -143,6 +175,7 @@
   <div id="hud" hidden>
     <div class="corner">
       <span id="coins-hud">🪙 0</span>
+      <span id="skulls-hud" hidden>☠ 0</span>
       <button id="btn-mute">🔊</button>
       <button id="btn-menu">Меню</button>
     </div>
@@ -168,6 +201,8 @@
       <h1>Кулька впала 😢</h1>
       <p class="sub">Рівень <b id="final-level">1</b> · Рахунок: <b id="final-score">0</b> · Рекорд: <b id="best-score">0</b><br />
         Зароблено 🪙 <b id="earned">0</b> — витрать їх у магазині на нові кульки й перчатки</p>
+      <p class="sub" id="hc-earned" hidden>☠ <b id="earned-skulls">0</b> за пройдені хардкор-рівні —
+        на них купуються персонажі</p>
       <div class="stack">
         <button id="btn-again">Ще раз (Пробіл)</button>
         <button id="btn-menu2" class="ghost" onclick="document.getElementById('btn-menu').click()">У меню</button>

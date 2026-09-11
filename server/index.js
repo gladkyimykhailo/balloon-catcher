@@ -10,8 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, useRage } from '../src/shared/physics.js';
-import { RULES, TICK, MAX_PLAYERS } from '../src/shared/constants.js';
+import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, setChar, useRage } from '../src/shared/physics.js';
+import { TICK, MAX_PLAYERS, rulesFor } from '../src/shared/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, '..', 'dist');
@@ -58,13 +58,19 @@ function makeCode() {
   return c;
 }
 
-function getRoom(code) {
+/**
+ * Кімната. Режим задає той, хто її створив: світ у кімнаті один, тож грати в
+ * ній у різні ігри неможливо. Хто приєднується пізніше, просто дізнається з
+ * `welcome`, куди саме він потрапив.
+ */
+function getRoom(code, hardcore) {
   let room = rooms.get(code);
   if (room) return room;
   room = {
     code,
+    hardcore: !!hardcore,
     clients: new Set(),
-    world: createWorld(),
+    world: createWorld(hardcore),
     acc: 0,
     last: Date.now(),
     sendAcc: 0,
@@ -110,11 +116,15 @@ function snapshot(room) {
     t: 'snap',
     ts: Date.now(),
     p,
-    h: w.hands.map((h) => [h.id, Math.round(h.x), Math.round(h.y), Math.max(0, +h.flash.toFixed(2)), Math.max(0, +h.slow.toFixed(2)), h.glove, +h.rage.toFixed(2), h.rages, h.dirty ? 1 : 0]),
+    h: w.hands.map((h) => [h.id, Math.round(h.x), Math.round(h.y), Math.max(0, +h.flash.toFixed(2)), Math.max(0, +h.slow.toFixed(2)), h.glove, +h.rage.toFixed(2), h.rages, h.dirty ? 1 : 0, h.char]),
     g: w.gull ? [Math.round(w.gull.x), Math.round(w.gull.y), w.gull.dir, +w.gull.flap.toFixed(2)] : null,
     df: +w.deflate.toFixed(2),
     sp: w.spikes.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fly' ? 1 : 0, s.phase === 'fall' ? 1 : 0]),
     pp: w.poops.map((p) => [p.id, Math.round(p.x), Math.round(p.y)]),
+    // Кут камінця веземо цілим у сотих радіана — інакше він один з'їдав би
+    // більше місця в снапшоті, ніж уся решта каменя.
+    sn: w.stones.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fall' ? 1 : 0, s.dead ? 1 : 0, Math.round(s.spin * 100)]),
+    hc: w.hardcore ? 1 : 0,
     mk: w.medkits,
     sk: w.skin,
     so: w.spikesOn ? 1 : 0,
@@ -151,7 +161,7 @@ wss.on('connection', (ws) => {
     if (m.t === 'join') {
       if (ws.room) return;
       const code = (m.room || '').toUpperCase().trim() || makeCode();
-      const room = getRoom(code);
+      const room = getRoom(code, !!m.hc);
       if (room.clients.size >= MAX_PLAYERS) {
         ws.send(JSON.stringify({ t: 'error', msg: `У цій кімнаті вже ${MAX_PLAYERS} гравці` }));
         return;
@@ -171,7 +181,10 @@ wss.on('connection', (ws) => {
         room.world.paused = false;
         restart(room.world);
       }
-      ws.send(JSON.stringify({ t: 'welcome', room: code, side: ws.side, maxLives: RULES.lives, maxPlayers: MAX_PLAYERS }));
+      ws.send(JSON.stringify({
+        t: 'welcome', room: code, side: ws.side,
+        maxLives: rulesFor(room.hardcore).lives, maxPlayers: MAX_PLAYERS, hc: room.hardcore ? 1 : 0,
+      }));
       announce(room);
       return;
     }
@@ -186,6 +199,9 @@ wss.on('connection', (ws) => {
     } else if (m.t === 'glove') {
       // Перчатка особиста, тож міняємо саме долоню того, хто прислав.
       setGlove(ws.room.world, ws.handId, Number(m.i) || 0);
+    } else if (m.t === 'char') {
+      // Хардкор-персонаж — так само особистий.
+      setChar(ws.room.world, ws.handId, Number(m.i) || 0);
     } else if (m.t === 'rage') {
       const ev = useRage(ws.room.world, ws.handId);
       if (ev) ws.room.pending.push(ev);
