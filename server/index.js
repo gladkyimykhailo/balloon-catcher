@@ -132,6 +132,7 @@ function snapshot(room) {
     sn: w.stones.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fall' ? 1 : 0, s.dead ? 1 : 0, Math.round(s.spin * 100)]),
     md: w.mode,
     tp: w.traps.map((t) => [t.id, Math.round(t.x), Math.round(t.y), t.type === 'web' ? 1 : 0, Math.round(t.life * 10)]),
+    hg: w.hogs.map((h) => [h.id, Math.round(h.x), Math.round(h.y), h.dir, Math.round(h.spin * 100), ['run', 'jump', 'leave'].indexOf(h.phase)]),
     cb: w.combo,
     bf: [Math.round(w.buff.speed * 10), Math.round(w.buff.size * 10)],
     mk: w.medkits,

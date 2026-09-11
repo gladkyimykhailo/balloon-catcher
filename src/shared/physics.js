@@ -6,7 +6,7 @@
 //      стискаєш кульку -> площа падає -> тиск росте -> вона випинається деінде.
 // Саме тому вона мнеться від долоні, а потім пружно вистрілює назад.
 
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, skinAt, gloveAt, handKit, biomeAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, hogReachY, skinAt, gloveAt, handKit, biomeAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
 
 const TAU = Math.PI * 2;
 
@@ -73,6 +73,10 @@ export function createWorld(mode = 'normal') {
     traps: [],
     trapSeq: 0,
     trapTimer: TRAP.firstDelay,
+    // Їжачки-вороги: прибігають у «дорослих» режимах і збивають кульку додолу.
+    hogs: [],
+    hogSeq: 0,
+    hogTimer: HOG.maxGap,
     combo: 0,            // скільки пасів поспіль без падіння
     bestCombo: 0,
     lastTapper: null,    // хто тапнув останнім — саме він і не може вдруге
@@ -152,7 +156,6 @@ export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
     flash: 0,
     glove: 0,         // скін перчатки; на відміну від кульки, він особистий
     char: 0,          // хардкор-персонаж — теж особистий, діє замість перчатки
-    stink: 0,         // ванючці лишилось стільки секунд до наступного смороду
     // Тім-ап: усе особисте живе тут, бо і серця в цьому режимі особисті.
     perks: perks | 0,
     lives: 0,         // власні серця (лише в тім-апі; решта режимів має w.lives)
@@ -235,7 +238,6 @@ function applyKit(w, h) {
   const kit = kitOf(w, h);
   h.r = HAND.r * kit.sizeMul;
   if (!kit.rage) h.rage = 0;         // не боксерська — шал гасне
-  h.stink = kit.stinkPeriod;         // ванючці — відлік до першого смороду
   return kit;
 }
 
@@ -330,6 +332,7 @@ export function step(w, dt) {
   updateSpikes(w, dt);
   updateStones(w, dt);
   updateTraps(w, dt);
+  updateHogs(w, dt);
   updateBuffs(w, dt);
   updateInflation(w, dt);
 
@@ -347,10 +350,9 @@ export function step(w, dt) {
   for (let s = 0; s < SUBSTEPS; s++) {
     // Долоню рухаємо всередині підкроків теж — інакше швидкий ляпас "протикає" оболонку.
     substep(w, h, (s + 1) / SUBSTEPS);
-    // Колючки їжачка лускають кульку прямо в момент удару, тобто посеред
-    // підкроків. Далі крутити фізику вже нічого: кульки як цілі більше нема,
-    // а checkFloor унизу зарахував би ще й падіння — тобто друге серце за одну
-    // й ту саму смерть.
+    // Якщо кульки посеред підкроків не стало, далі крутити фізику нічого:
+    // checkFloor унизу зарахував би ще й падіння, тобто друге серце за одну й
+    // ту саму смерть.
     if (w.state !== 'playing') return;
   }
 
@@ -837,6 +839,90 @@ function updateTraps(w, dt) {
   w.events.push({ type: 'trap', x: w.traps.at(-1).x, y: w.traps.at(-1).y, player: web ? 1 : 0 });
 }
 
+/**
+ * Їжачки. Єдина загроза, що приходить по землі: вибігає збоку, доганяє кульку
+ * по горизонталі й підстрибує. Серця не забирає — б'є кульку ДОДОЛУ, і далі
+ * все вирішує, чи встигне хтось її підхопити.
+ *
+ * Стрибати він пробує, лише коли справді дістане (`hogReachY`), інакше
+ * підстрибував би марно під кулькою, яка висить під стелею, — а так у гравця є
+ * зрозуміле правило: тримай кульку вище, і їжак тобі не страшний.
+ */
+function updateHogs(w, dt) {
+  if (!hogsInMode(w) || w.state !== 'playing') return;
+  const reach = hogReachY();
+
+  for (let i = w.hogs.length - 1; i >= 0; i--) {
+    const h = w.hogs[i];
+    h.t += dt;
+
+    if (h.phase === 'leave') {
+      h.x += h.dir * HOG.speed * 1.4 * dt;
+      if (h.x < -120 || h.x > WORLD.w + 120) w.hogs.splice(i, 1);
+      continue;
+    }
+
+    if (h.phase === 'jump') {
+      h.vy += HOG.gravity * dt;
+      h.y += h.vy * dt;
+      if (hogHitsBalloon(w.balloon, h.x, h.y)) {
+        // Удар — це поштовх ВНИЗ усій оболонці однаково, як і ляпас долоні:
+        // спільний зсув швидкості не рве оболонку, хай яким сильним буде.
+        for (const p of w.balloon.pts) {
+          p.vy += HOG.kick;
+          p.vx += h.dir * HOG.kick * 0.25;
+        }
+        w.events.push({ type: 'hogHit', x: h.x, y: h.y, player: -1 });
+        h.phase = 'leave';
+        h.dir = h.x < WORLD.w / 2 ? -1 : 1;
+        continue;
+      }
+      if (h.y >= FLOOR_Y) { h.y = FLOOR_Y; h.vy = 0; h.phase = 'run'; }
+      continue;
+    }
+
+    // Біжить під кульку.
+    const c = balloonCenter(w.balloon);
+    const dx = c.x - h.x;
+    h.dir = dx >= 0 ? 1 : -1;
+    h.x += h.dir * Math.min(Math.abs(dx), HOG.speed * dt);
+    h.spin += (h.dir * HOG.speed * dt) / HOG.r;
+    if (Math.abs(dx) < HOG.aimGap && balloonBottom(w.balloon) > reach) {
+      h.phase = 'jump';
+      h.vy = -HOG.jumpSpeed;
+    } else if (h.t > HOG.leaveAfter) {
+      h.phase = 'leave';
+      h.dir = h.x < WORLD.w / 2 ? -1 : 1;
+    }
+  }
+
+  w.hogTimer -= dt;
+  if (w.hogTimer > 0) return;
+  w.hogTimer = HOG.minGap + Math.random() * (HOG.maxGap - HOG.minGap);
+  const fromLeft = Math.random() < 0.5;
+  w.hogs.push({
+    id: ++w.hogSeq,
+    x: fromLeft ? -60 : WORLD.w + 60,
+    y: FLOOR_Y,
+    vy: 0, dir: fromLeft ? 1 : -1, spin: 0, t: 0,
+    phase: 'run',
+  });
+  w.events.push({ type: 'hog', x: w.hogs.at(-1).x, y: FLOOR_Y, player: -1 });
+}
+
+/** У дитячій грі їжачків немає: вони живуть у «дорослих» режимах. */
+function hogsInMode(w) {
+  return w.hardcore || w.team;
+}
+
+function hogHitsBalloon(b, x, y) {
+  if (pointInPolygon(x, y, b.pts)) return true;
+  for (const p of b.pts) {
+    if (Math.hypot(p.x - x, p.y - y) < HOG.r + BALLOON.skin) return true;
+  }
+  return false;
+}
+
 /** Смола, в якій зараз грузне кулька (або null). Читається в `substep`. */
 function tarAt(w) {
   if (!w.team) return null;
@@ -911,6 +997,11 @@ function clearHazards(w) {
   w.spikeTimer = SPIKE.minGap;
   w.stones.length = 0;
   w.stoneTimer = STONE.maxGap;
+  w.hogs.length = 0;
+  // Після падіння їжачка з поля прибираємо (доганяти щойно відроджену кульку —
+  // нечесно), але відлік скидаємо лише наполовину: з повним `minGap` гравець,
+  // який часто впускає кульку, взагалі ніколи б їх не побачив.
+  w.hogTimer = HOG.minGap / 2;
   w.poops.length = 0;
   if (!w.team) return;
   // Пастки прибираємо теж, а разом з ними й павутину на руках: доганяти кульку
@@ -979,19 +1070,6 @@ function moveHands(w, dt) {
     if (h.slow > 0) h.slow = Math.max(0, h.slow - dt);
     if (h.rage > 0) h.rage = Math.max(0, h.rage - dt);
     if (h.flash > 0) h.flash -= dt * 3;
-
-    // Ванючка смердить сама по собі: раз на stinkPeriod лапа брудніє без жодної
-    // чайки. Відлік іде лише в живій грі — інакше вона просмерділась би, поки
-    // кімната чекає на друзів. Поки лапа й так брудна, таймер стоїть: дві
-    // брудноти поспіль нічого не додають, а мити треба однаково один раз.
-    if (kit.stinkPeriod && !h.dirty && !w.paused && w.state === 'playing') {
-      h.stink -= dt;
-      if (h.stink <= 0) {
-        h.stink = kit.stinkPeriod;
-        h.dirty = true;
-        w.events.push({ type: 'stink', x: h.x, y: h.y, player: h.player });
-      }
-    }
   }
 }
 
@@ -1232,16 +1310,6 @@ function collideHands(w, alpha) {
         // Шал не лише прибирає штраф — саме тому в ньому й зараховується
         // кожен удар підряд: `scores` дивиться на той самий `slow`.
         if (hd.rage <= 0) hd.slow = HAND.slowTime * skinAt(w.skin).slowMul;
-        // Колючки їжачка — плата за удар без замаху. Заміряно на 1077 ударах:
-        // луснуло 101, тобто приблизно кожен одинадцятий. Шанс розігруємо саме
-        // на ЗАРАХОВАНОМУ ударі, а не на кожному дотику, — інакше кулька
-        // лускалась би просто від того, що персонаж її підпирає.
-        if (scores && kit.popChance > 0 && Math.random() < kit.popChance) {
-          w.events.push({ type: 'pop', x: acc.cx / acc.hits, y: acc.cy / acc.hits, player: hd.player });
-          hd.touching = true;
-          loseLives(w, 1);
-          return;   // кульки як цілі вже немає, решту рук цього підкроку не питаємо
-        }
         if (scores) {
           // Пас — це удар, перед яким бив ХТОСЬ ІНШИЙ. Перший удар після
           // падіння пасом не рахується: передавати ще не було кому.
@@ -1425,6 +1493,8 @@ export function restart(w) {
   w.stoneTimer = STONE.maxGap;
   w.traps.length = 0;
   w.trapTimer = TRAP.firstDelay;
+  w.hogs.length = 0;
+  w.hogTimer = HOG.maxGap;
   w.buff.speed = 0;
   w.buff.size = 0;
   w.bestCombo = 0;
@@ -1439,7 +1509,6 @@ export function restart(w) {
   rollSpikes(w);   // у хардкорі шипи є вже на першому рівні, тож жереб — одразу
   for (const h of w.hands) {
     h.touching = false; h.slow = 0; h.rage = 0; h.rages = RAGE.perLevel; h.dirty = false;
-    h.stink = kitOf(w, h).stinkPeriod;
     h.web = 0; h.shield = 0; h.out = false; h.lives = teamLives(h);
   }
 }

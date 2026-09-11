@@ -206,8 +206,19 @@ export class Net {
     // міняється: залишок життя (по ньому пастка блимає перед зникненням).
     const traps = (b.tp ?? []).map((t) => ({ id: t[0], x: t[1], y: t[2], type: t[3] ? 'web' : 'tar', life: t[4] / 10 }));
 
+    // Їжачки бігають і стрибають швидко, тож інтерполюємо їх за id, як шипи.
+    const hogs = (b.hg ?? []).map((hb) => {
+      const ha = (a.hg ?? []).find((x) => x[0] === hb[0]);
+      return {
+        id: hb[0],
+        x: ha ? ha[1] + (hb[1] - ha[1]) * k : hb[1],
+        y: ha ? ha[2] + (hb[2] - ha[2]) * k : hb[2],
+        dir: hb[3], spin: hb[4] / 100, phase: ['run', 'jump', 'leave'][hb[5]] ?? 'run',
+      };
+    });
+
     return {
-      points, hands, gull, spikes, poops, stones, traps,
+      points, hands, gull, spikes, poops, stones, traps, hogs,
       deflate: b.df ?? 0, spikesOn: !!b.so,
       mode: b.md || 'normal', hardcore: b.md === 'hardcore', team: b.md === 'team',
       combo: b.cb ?? 0, buff: { speed: (b.bf?.[0] ?? 0) / 10, size: (b.bf?.[1] ?? 0) / 10 },

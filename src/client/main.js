@@ -542,6 +542,7 @@ function frameLocal(dt) {
     spikes: w.spikes.map((s) => ({ id: s.id, x: s.x, y: s.y, flying: s.phase !== 'warn', dead: s.phase === 'fall' })),
     stones: w.stones.map((s) => ({ id: s.id, x: s.x, y: s.y, spin: s.spin, flying: s.phase === 'fall', dead: s.dead })),
     traps: w.traps.map((t) => ({ id: t.id, x: t.x, y: t.y, type: t.type, life: t.life })),
+    hogs: w.hogs.map((h) => ({ id: h.id, x: h.x, y: h.y, dir: h.dir, spin: h.spin, phase: h.phase })),
     poops: w.poops.map((p) => ({ id: p.id, x: p.x, y: p.y })),
     medkits: w.medkits,
     skin: w.skin,
@@ -594,6 +595,7 @@ function frameOnline(dt) {
     spikes: snap.spikes,
     stones: snap.stones,
     traps: snap.traps,
+    hogs: snap.hogs,
     poops: snap.poops,
     medkits: snap.medkits,
     skin: snap.skin,
@@ -632,6 +634,7 @@ function idleView(dt) {
     spikes: [],
     stones: [],
     traps: [],
+    hogs: [],
     poops: [],
     medkits: 0,
     skin: demo.skin,
@@ -748,17 +751,14 @@ function onWorldEvent(e) {
     renderer.burst(e.x, e.y, 0x9a9086, 1);
     renderer.shake = 1;
     sfx.stoneHit();
-  } else if (e.type === 'pop') {
-    // Колючки їжачка. Кажемо прямо, чому кулька зникла: інакше це читалось би
-    // як баг, а не як плата за найсильніший удар у грі.
-    banner = { text: 'Колючки! Кулька луснула 🦔', t: 2.2 };
-    renderer.burst(e.x, e.y, 0xffffff, 1);
-    renderer.shake = 1;
-    sfx.pop();
-  } else if (e.type === 'stink') {
-    banner = { text: 'Фу, ванючка! Лапа брудна — до відра 🪣', t: 2.2 };
-    renderer.burst(e.x, e.y, 0x9ad36b, 0.7);
-    sfx.stink();
+  } else if (e.type === 'hog') {
+    banner = { text: 'Їжачок біжить! 🦔 тримай кульку вище', t: 2.0 };
+    sfx.hog();
+  } else if (e.type === 'hogHit') {
+    banner = { text: 'Їжачок збив кульку! 🦔 лови її!', t: 2.0 };
+    renderer.burst(e.x, e.y, 0x8a6134, 1);
+    renderer.shake = 0.9;
+    sfx.hogHit();
   } else if (e.type === 'spike') {
     banner = { text: 'Шип! −2 ❤️', t: 2.2 };
     renderer.burst(e.x, e.y, 0xff4d4d, 1);

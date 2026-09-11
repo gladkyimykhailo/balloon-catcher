@@ -1,5 +1,5 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, bucketSpots } from '../shared/constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, HOG, hogReachY, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, bucketSpots } from '../shared/constants.js';
 
 const BAR_W = 360;
 const BAR_H = 24;
@@ -40,6 +40,9 @@ export class Renderer {
     // Пастки — під кулькою і під руками: у смолі кулька має грузнути, тобто
     // бути ВСЕРЕДИНІ хмари, а не перед нею.
     this.trapsG = new Graphics();
+    // Їжачки — перед кулькою, як і камінці: момент удару має бути видно, а не
+    // ховатись за оболонкою.
+    this.hogsG = new Graphics();
     this.poopsG = new Graphics();
     this.shadowG = new Graphics();
     this.handLayer = new Container();
@@ -47,7 +50,7 @@ export class Renderer {
     this.hud = new Container();
     // Камінці — над кулькою: вони падають на неї згори, і ховати їх за
     // оболонкою означало б втратити саме той кадр, у якому ще можна відвести.
-    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.gull, this.handLayer, this.fx, this.hud);
+    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.hogsG, this.gull, this.handLayer, this.fx, this.hud);
 
     // Відблиск малюємо один раз в одиничних координатах і далі лише
     // масштабуємо/повертаємо — так він виглядає як нахилений полиск, а не як цифра.
@@ -320,6 +323,7 @@ export class Renderer {
     this.drawSpikes(view.spikes, dt);
     this.drawStones(view.stones, dt);
     this.drawTraps(view.traps, dt);
+    this.drawHogs(view.hogs, dt);
     this.drawPoops(view.poops);
 
     const alive = new Set();
@@ -568,6 +572,54 @@ export class Renderer {
       }
       for (let k = 1; k <= 3; k++) {
         g.circle(t.x, t.y, (r * k) / 3.2).stroke({ width: 2, color: 0xffffff, alpha: 0.6 * fade });
+      }
+    }
+  }
+
+  /**
+   * Їжачки. Малюємо колючий клубок із мордою, і клубок котиться: кут береться
+   * з пройденого шляху, тож голки крутяться рівно тоді, коли він біжить.
+   * У стрибку додаємо легкий нахил уперед — видно, що це вже не біг.
+   */
+  drawHogs(hogs, dt) {
+    const g = this.hogsG;
+    g.clear();
+    if (!hogs || !hogs.length) return;
+    this.hogT = (this.hogT ?? 0) + dt;
+
+    for (const h of hogs) {
+      const jumping = h.phase === 'jump';
+      const lean = jumping ? h.dir * 0.35 : Math.sin(this.hogT * 12) * 0.06;
+      const r = HOG.r;
+
+      // Тінь на підлозі — по ній видно, під ким саме він зараз стоїть.
+      const t = Math.max(0, Math.min(1, 1 - (FLOOR_Y - h.y) / 260));
+      g.ellipse(h.x, FLOOR_Y + 8, r * (0.7 + 0.5 * t), 8 * (0.5 + 0.6 * t))
+        .fill({ color: 0x000000, alpha: 0.1 + 0.18 * t });
+
+      // Голки по верхньому півколу, повернуті разом із клубком.
+      for (let i = 0; i < 11; i++) {
+        const a = Math.PI + lean + (i / 10) * Math.PI + h.spin * 0.35;
+        const inner = r * 0.62, outer = r * (1.5 + (i % 2) * 0.22);
+        const wdt = 0.13;
+        g.moveTo(h.x + Math.cos(a - wdt) * inner, h.y + Math.sin(a - wdt) * inner)
+          .lineTo(h.x + Math.cos(a) * outer, h.y + Math.sin(a) * outer)
+          .lineTo(h.x + Math.cos(a + wdt) * inner, h.y + Math.sin(a + wdt) * inner)
+          .closePath()
+          .fill(i % 2 ? 0x6b4a2f : 0x4e3520);
+      }
+      g.circle(h.x, h.y, r * 0.95).fill(0xd7a86e).stroke({ width: 4, color: 0x8a6134 });
+      // Морда дивиться туди, куди біжить.
+      const f = h.dir;
+      g.ellipse(h.x + f * r * 0.55, h.y + r * 0.25, r * 0.42, r * 0.3).fill(0xf0d3ae);
+      g.circle(h.x + f * r * 0.92, h.y + r * 0.3, r * 0.16).fill(0x2b2b2b);
+      g.circle(h.x + f * r * 0.3, h.y - r * 0.1, r * 0.13).fill(0x2b2b2b);
+      g.circle(h.x + f * r * 0.26, h.y - r * 0.14, r * 0.05).fill(0xffffff);
+      // Лапки — лише коли біжить по землі.
+      if (!jumping) {
+        const step = Math.sin(this.hogT * 16) * r * 0.22;
+        g.ellipse(h.x - r * 0.35 + step, h.y + r * 0.92, r * 0.2, r * 0.12).fill(0x8a6134);
+        g.ellipse(h.x + r * 0.35 - step, h.y + r * 0.92, r * 0.2, r * 0.12).fill(0x8a6134);
       }
     }
   }

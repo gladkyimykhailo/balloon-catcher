@@ -83,13 +83,15 @@ export const sfx = {
     blip({ freq: 300, to: 60, dur: 0.3, type: 'square', gain: 0.2 });
     setTimeout(() => blip({ freq: 140, to: 40, dur: 0.5, type: 'sawtooth', gain: 0.16 }), 60);
   },
-  // Кулька луснула на колючках — різкий бах і шипіння повітря.
-  pop() {
-    blip({ freq: 2200, to: 120, dur: 0.07, type: 'square', gain: 0.22 });
-    setTimeout(() => blip({ freq: 900, to: 60, dur: 0.5, type: 'sawtooth', gain: 0.12 }), 50);
+  // Їжачок вибіг — квапливе пирхання.
+  hog() {
+    [0, 110, 220].forEach((d) => setTimeout(() => blip({ freq: 340, to: 240, dur: 0.07, type: 'square', gain: 0.09 }), d));
   },
-  // Сморід ванючки — низхідне «пфф».
-  stink() { blip({ freq: 420, to: 110, dur: 0.45, type: 'sawtooth', gain: 0.1 }); },
+  // Влучив: глухий удар і свист кульки, що полетіла додолу.
+  hogHit() {
+    blip({ freq: 260, to: 80, dur: 0.2, type: 'square', gain: 0.18 });
+    setTimeout(() => blip({ freq: 700, to: 200, dur: 0.4, type: 'sine', gain: 0.1 }), 70);
+  },
   // Пас: короткий висхідний «дзинь», і що довша серія, то вище — на слух чути,
   // як росте комбо, не дивлячись на лічильник.
   pass(k = 0) { blip({ freq: 520 + k * 520, to: 780 + k * 700, dur: 0.09, type: 'sine', gain: 0.1 }); },
