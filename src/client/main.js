@@ -2,8 +2,8 @@ import { Renderer } from './renderer.js';
 import { Input } from './input.js';
 import { Net, defaultServerUrl } from './net.js';
 import { sfx, setMuted, isMuted } from './sound.js';
-import { createWorld, step, addHand, setHandTarget, restart, levelInfo, advanceHand, useMedkit, anyHandSlowed, setSkin, setGlove, useRage, canTap, maxLivesOf } from '../shared/physics.js';
-import { WORLD, RULES, HARDCORE, TEAM, PLAYER_COLORS, PLAYER_COLOR_NAMES, PLAYER_NAMES, MEDKIT, RAGE, COIN, SKINS, GLOVES, CHARACTERS, PERKS, BUFFS, handKit, biomeAt, rulesFor, skullReward, perkMask } from '../shared/constants.js';
+import { createWorld, step, addHand, setHandTarget, restart, levelInfo, advanceHand, useMedkit, anyHandSlowed, setSkin, setGlove, useRage, useGlove, canTap, maxLivesOf } from '../shared/physics.js';
+import { WORLD, RULES, HARDCORE, TEAM, SKUNK, PLAYER_COLORS, PLAYER_COLOR_NAMES, PLAYER_NAMES, MEDKIT, RAGE, COIN, SKINS, GLOVES, CHARACTERS, PERKS, BUFFS, handKit, biomeAt, ladderAt, rulesFor, skullReward, perkMask } from '../shared/constants.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -74,6 +74,7 @@ async function boot() {
 
   $('#btn-med').onclick = (e) => { e.preventDefault(); $('#btn-med').blur(); doMedkit(); };
   $('#btn-rage').onclick = (e) => { e.preventDefault(); $('#btn-rage').blur(); doRage(); };
+  $('#btn-glove').onclick = (e) => { e.preventDefault(); $('#btn-glove').blur(); doWear(); };
 
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && game.over) { e.preventDefault(); doRestart(); }
@@ -81,6 +82,7 @@ async function boot() {
     // KeyH — за розкладкою клавіш, тож працює і на кирилиці («Р»).
     if (e.code === 'KeyH' && game.mode && !game.over) { e.preventDefault(); doMedkit(); }
     if (e.code === 'KeyB' && game.mode && !game.over) { e.preventDefault(); doRage(); }
+    if (e.code === 'KeyG' && game.mode && !game.over) { e.preventDefault(); doWear(); }
   });
   window.addEventListener('pointerdown', () => sfx.unlock(), { once: true });
 
@@ -426,6 +428,31 @@ function doRage() {
   if (ev) onWorldEvent(ev);
 }
 
+/** Рукавичка від газу — той самий шлях, що аптечка й шал. */
+function doWear() {
+  if (game.mode === 'online') { game.net.wear(); return; }
+  if (!game.world) return;
+  const ev = useGlove(game.world, 'h0');
+  if (ev) onWorldEvent(ev);
+}
+
+/**
+ * Кнопка рукавички живе лише в хардкорі — більше ніде немає скунсів.
+ * Поки рукавичка вдягнена, кнопка горить і показує, скільки ще тримає.
+ */
+function updateGloveButton(hand) {
+  const box = $('#glove');
+  box.hidden = !(game.hardcore && hand);
+  if (box.hidden) return;
+  const btn = $('#btn-glove');
+  const on = (hand.gloveOn ?? 0) > 0;
+  btn.disabled = !((hand.gloves ?? 0) > 0 && !on);
+  btn.classList.toggle('on', on);
+  $('#glove-left').textContent = on
+    ? 'Вдягнена ' + hand.gloveOn.toFixed(1) + ' с'
+    : (hand.gloves ?? 0) + ' / ' + SKUNK.glovePerLevel + ' на рівень';
+}
+
 /**
  * Кнопка шалу видима лише для боксерської перчатки — решті вона нічого не дає.
  * Поки шал триває, кнопка горить червоним і не приймає другий заряд.
@@ -508,6 +535,7 @@ function frame(dt) {
         updateMedButton(view.medkits ?? 0, view.lives, view.maxLives, anyHandSlowed(mine));
       }
       updateRageButton(mine[0]);
+      updateGloveButton(mine[0]);
     }
   }
 }
@@ -531,6 +559,7 @@ function frameLocal(dt) {
       // Правило черги рахуємо тут, щоб малювальник просто малював привида,
       // а не переказував правила гри своїми словами.
       lives: h.lives, out: h.out, web: h.web, shield: h.shield,
+      gloveOn: h.gloveOn, gloves: h.gloves,
       maxLives: maxLivesOf(w, h),
       locked: w.team && !h.out && h.web <= 0 && !canTap(w, h),
     })),
@@ -543,11 +572,12 @@ function frameLocal(dt) {
     stones: w.stones.map((s) => ({ id: s.id, x: s.x, y: s.y, spin: s.spin, flying: s.phase === 'fall', dead: s.dead })),
     traps: w.traps.map((t) => ({ id: t.id, x: t.x, y: t.y, type: t.type, life: t.life })),
     hogs: w.hogs.map((h) => ({ id: h.id, x: h.x, y: h.y, dir: h.dir, spin: h.spin, phase: h.phase })),
+    skunks: w.skunks.map((s) => ({ id: s.id, x: s.x, dir: s.dir, phase: s.phase })),
+    gas: w.gas.map((g) => ({ id: g.id, x: g.x, life: g.life })),
     poops: w.poops.map((p) => ({ id: p.id, x: p.x, y: p.y })),
     medkits: w.medkits,
     skin: w.skin,
     deflate: w.deflate,
-    spikesOn: w.spikesOn,
     hardcore: w.hardcore,
     team: w.team,
     combo: w.combo,
@@ -596,11 +626,12 @@ function frameOnline(dt) {
     stones: snap.stones,
     traps: snap.traps,
     hogs: snap.hogs,
+    skunks: snap.skunks,
+    gas: snap.gas,
     poops: snap.poops,
     medkits: snap.medkits,
     skin: snap.skin,
     deflate: snap.deflate,
-    spikesOn: snap.spikesOn,
     hardcore: snap.hardcore,
     team: snap.team,
     combo: snap.combo,
@@ -635,11 +666,12 @@ function idleView(dt) {
     stones: [],
     traps: [],
     hogs: [],
+    skunks: [],
+    gas: [],
     poops: [],
     medkits: 0,
     skin: demo.skin,
     deflate: 0,
-    spikesOn: false,
     hardcore: false,
     team: false,
     combo: 0,
@@ -751,6 +783,24 @@ function onWorldEvent(e) {
     renderer.burst(e.x, e.y, 0x9a9086, 1);
     renderer.shake = 1;
     sfx.stoneHit();
+  } else if (e.type === 'skunk') {
+    banner = { text: 'Скунс біжить! 🦨', t: 1.8 };
+    sfx.hog();
+  } else if (e.type === 'skunkWarn') {
+    banner = { text: 'Зараз пустить газ! 🧤 вдягни рукавичку (G) або тікай убік', t: 2.2 };
+    sfx.stoneWarn();
+  } else if (e.type === 'gas') {
+    renderer.burst(e.x, e.y, 0x9ad36b, 0.8);
+    sfx.gas();
+  } else if (e.type === 'glove') {
+    banner = { text: 'Рукавичка вдягнена 🧤 · лишилось ' + e.level, t: 1.4 };
+    renderer.burst(e.x, e.y, 0x3ec46d, 0.8);
+    sfx.heal();
+  } else if (e.type === 'choke') {
+    banner = { text: 'Газ! −1 ❤️ · вдягни рукавичку або тікай', t: 1.2 };
+    renderer.burst(e.x, e.y, 0x9ad36b, 0.7);
+    renderer.shake = 0.5;
+    sfx.choke();
   } else if (e.type === 'hog') {
     banner = { text: 'Їжачок біжить! 🦔 тримай кульку вище', t: 2.0 };
     sfx.hog();
@@ -776,9 +826,13 @@ function onWorldEvent(e) {
       addSkulls(n);
       earned = '\n+☠ ' + n + ' за пройдений рівень';
     }
+    // У класиці кожен рівень додає нову загрозу — і саме про неї банер
+    // попереджає окремим рядком. Сходинка рахується з номера рівня, тож
+    // повідомлення однакове в усіх, хто грає в цій кімнаті.
+    const adds = game.hardcore || game.team ? '' : ladderAt(e.level).adds;
     banner = {
       text: 'Рівень ' + e.level + '! ' + b.emoji + ' ' + b.name + ' — ' + b.note
-        + (e.spikes && !game.hardcore ? '\nОбережно, шипи ⚠' : '') + earned,
+        + (adds ? '\n' + adds : '') + earned,
       t: 2.8,
     };
     renderer.barPulse = 1;

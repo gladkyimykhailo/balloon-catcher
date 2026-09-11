@@ -124,6 +124,17 @@
   #btn-med:disabled, #btn-rage:disabled { background: #c3d2db; color: #7d909d; cursor: default; filter: none; transform: none; }
   #med-left, #rage-left { font-size: 15px; opacity: .75; }
 
+  /* Рукавичка від скунсового газу — третьою кнопкою в тій самій колонці. */
+  #glove { pointer-events: none; }
+  #btn-glove { pointer-events: auto; }
+  #glove { position: fixed; left: 14px; bottom: 138px; display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); }
+  #btn-glove { background: #3ec46d; padding: 12px 18px; font-size: 17px; }
+  #btn-glove:disabled { background: #c3d2db; color: #7d909d; cursor: default; filter: none; transform: none; }
+  #btn-glove.on { background: #1f8f6a; animation: pulse .5s infinite alternate; }
+  #glove-left { font-size: 15px; opacity: .75; }
+
   /* Шал боксерської перчатки — поряд з аптечкою, тим же розміром під палець. */
   #rage { position: fixed; left: 14px; bottom: 76px; display: flex; align-items: center; gap: 10px;
     background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
@@ -146,6 +157,8 @@
     <div class="card">
       <h1>🎈 Не впусти кульку!</h1>
       <p class="sub">Бий долонею знизу, щоб кулька не торкнулась підлоги.<br />
+        Перший рівень спокійний, а далі кожен додає нову загрозу: шипи ⚠, чайку 🕊,
+        їжачка 🦔, камінці 🪨.<br />
         Шипи можна відбивати рукою, аптечка (H) повертає серце, а боксерська перчатка
         вмикає шал (B) — 5 секунд без кулдауну</p>
       <div id="wallet">Твої монети: <b id="coins">🪙 0</b> · черепи хардкора: <b id="skulls">☠ 0</b> · жетони тім-апа: <b id="tokens">🤝 0</b></div>
@@ -212,6 +225,10 @@
     <div id="med">
       <button id="btn-med">🩹 Аптечка</button>
       <span id="med-left">5 / 5 на рівень</span>
+    </div>
+    <div id="glove" hidden>
+      <button id="btn-glove">🧤 Рукавичка</button>
+      <span id="glove-left">4 / 4 на рівень</span>
     </div>
     <div id="rage" hidden>
       <button id="btn-rage">🥊 Шал</button>

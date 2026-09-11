@@ -113,6 +113,11 @@ export class Net {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'perks', m: mask }));
   }
 
+  /** Вдягнути рукавичку від газу — сервер вдягне її саме твоєму персонажу. */
+  wear() {
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'wear' }));
+  }
+
   rage() {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'rage' }));
   }
@@ -153,6 +158,7 @@ export class Net {
         // і клієнту не треба знати, хто ще може бити.
         lives: hb[10] ?? 0, out: hb[11] === 1, web: hb[12] ?? 0,
         shield: hb[13] ?? 0, locked: hb[14] === 1, maxLives: hb[15] ?? 3,
+        gloveOn: hb[16] ?? 0, gloves: hb[17] ?? 0,
       };
     });
 
@@ -217,9 +223,20 @@ export class Net {
       };
     });
 
+    // Скунси бігають по підлозі, тож везеться лише x; хмара газу стоїть на місці.
+    const skunks = (b.sk ?? []).map((sb) => {
+      const sa = (a.sk ?? []).find((x) => x[0] === sb[0]);
+      return {
+        id: sb[0],
+        x: sa ? sa[1] + (sb[1] - sa[1]) * k : sb[1],
+        dir: sb[2], phase: ['run', 'hiss', 'leave'][sb[3]] ?? 'run',
+      };
+    });
+    const gas = (b.gz ?? []).map((g) => ({ id: g[0], x: g[1], life: g[2] / 10 }));
+
     return {
-      points, hands, gull, spikes, poops, stones, traps, hogs,
-      deflate: b.df ?? 0, spikesOn: !!b.so,
+      points, hands, gull, spikes, poops, stones, traps, hogs, skunks, gas,
+      deflate: b.df ?? 0,
       mode: b.md || 'normal', hardcore: b.md === 'hardcore', team: b.md === 'team',
       combo: b.cb ?? 0, buff: { speed: (b.bf?.[0] ?? 0) / 10, size: (b.bf?.[1] ?? 0) / 10 },
       score: b.sc, lives: b.lv, state: b.st,

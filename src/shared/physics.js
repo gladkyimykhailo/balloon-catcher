@@ -6,7 +6,7 @@
 //      стискаєш кульку -> площа падає -> тиск росте -> вона випинається деінде.
 // Саме тому вона мнеться від долоні, а потім пружно вистрілює назад.
 
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, hogReachY, skinAt, gloveAt, handKit, biomeAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, SKUNK, hogReachY, skinAt, gloveAt, handKit, biomeAt, ladderAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
 
 const TAU = Math.PI * 2;
 
@@ -60,7 +60,7 @@ export function createWorld(mode = 'normal') {
     gullTimer: m === 'hardcore' ? HARDCORE.gullPeriod : GULL.period,
     deflate: 0,          // скільки секунд кулька ще здута
     spikes: [],          // шипи в польоті або на попередженні
-    spikesOn: m === 'hardcore',  // чи випав поточному рівню «шиповий» жереб (у хардкорі — завжди)
+    spikesOn: m === 'hardcore',  // чи є шипи на поточному рівні (у хардкорі — завжди, у класиці — зі сходів)
     spikeTimer: 0,
     spikeSeq: 0,
     poops: [],           // те, що падає з чайки
@@ -77,6 +77,11 @@ export function createWorld(mode = 'normal') {
     hogs: [],
     hogSeq: 0,
     hogTimer: HOG.maxGap,
+    // Скунси й хмари газу, які вони по собі лишають.
+    skunks: [],
+    gas: [],
+    skunkSeq: 0,
+    skunkTimer: SKUNK.firstDelay,
     combo: 0,            // скільки пасів поспіль без падіння
     bestCombo: 0,
     lastTapper: null,    // хто тапнув останнім — саме він і не може вдруге
@@ -162,6 +167,11 @@ export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
     out: false,       // серця скінчились — гравець вибув, решта грає далі
     web: 0,           // скільки секунд ще тримає павутина
     shield: 0,        // заряд щита: одна пастка мине
+    // Рукавичка від скунсового газу. `glove` вище — це скін перчатки, тож
+    // захист живе в окремих полях, щоб їх не плутати.
+    gloveOn: 0,       // скільки секунд ще захищає вдягнена рукавичка
+    gloves: SKUNK.glovePerLevel,
+    gasT: 0,          // скільки вже дихає газом (набігає до секунди)
     rage: 0,          // скільки секунд ще триває шалений режим
     rages: RAGE.perLevel,
     dirty: false,     // чайка влучила: кулька ковзає, очки не йдуть
@@ -333,6 +343,7 @@ export function step(w, dt) {
   updateStones(w, dt);
   updateTraps(w, dt);
   updateHogs(w, dt);
+  updateSkunks(w, dt);
   updateBuffs(w, dt);
   updateInflation(w, dt);
 
@@ -376,7 +387,10 @@ function updateGull(w, dt) {
     // інакше птаха зникала б просто в повітрі на переході рівня.
     // Ванючка проганяє їх так само надійно, як ніч — саме за це її й купують.
     const period = gullPeriod(w);
-    if (!biomeAt(w.level).gulls || stinksInRoom(w)) { w.gullTimer = period; return; }
+    // Три причини не прилітати: сходинка рівня ще не дійшла до чайок, ніч
+    // (вони сплять) або ванючка на полі (сморід проганяє).
+    const r = rung(w);
+    if ((r && !r.gulls) || !biomeAt(w.level).gulls || stinksInRoom(w)) { w.gullTimer = period; return; }
     w.gullTimer = period;
     const fromLeft = Math.random() < 0.5;
     w.gull = {
@@ -448,9 +462,27 @@ function updateGull(w, dt) {
   }
 }
 
+/**
+ * Сходинка складності поточного рівня — джерело правди про те, які загрози
+ * зараз увімкнені в КЛАСИЦІ. У хардкорі й тім-апі сходів немає (повертає null):
+ * там набір загроз задає сам режим, а не номер рівня.
+ */
+function rung(w) {
+  return w.hardcore || w.team ? null : ladderAt(w.level);
+}
+
+/**
+ * Множник пауз між загрозами. На сходах — 1, після них паузи поступово
+ * стискаються: нового вже не додається, тож гра важчає темпом.
+ */
+function gapMul(w) {
+  const r = rung(w);
+  return r ? r.gapMul : 1;
+}
+
 /** Як часто прилітають чайки: у хардкорі майже вдвічі частіше. */
 function gullPeriod(w) {
-  return w.hardcore ? HARDCORE.gullPeriod : GULL.period;
+  return w.hardcore ? HARDCORE.gullPeriod : GULL.period * gapMul(w);
 }
 
 /**
@@ -473,10 +505,29 @@ function medkitsFor(w) {
  * приходив би на десятий рівень із півсотнею аптечок у кишені.
  */
 function onLevelUp(w, lvl) {
+  const before = rung(w);
   w.level = lvl;
   w.medkits = medkitsFor(w);
-  for (const h of w.hands) h.rages = RAGE.perLevel;
+  for (const h of w.hands) { h.rages = RAGE.perLevel; h.gloves = SKUNK.glovePerLevel; }
   rollSpikes(w);
+  greetNewHazards(w, before);
+}
+
+/**
+ * Дебют нової загрози оголошує банер, а не влучання. Тому тій, що саме
+ * увімкнулась на цьому рівні, ставимо ПОВНУ паузу: інакше їжачок міг би
+ * вибігти вже за шість секунд (стільки лишає `clearHazards` після падіння) —
+ * тобто раніше, ніж гравець дочитає, хто це взагалі такий.
+ *
+ * `before` — сходинка попереднього рівня; null означає режим без сходів.
+ */
+function greetNewHazards(w, before) {
+  const now = rung(w);
+  if (!now || !before) return;
+  if (now.gulls && !before.gulls) w.gullTimer = gullPeriod(w);
+  if (now.hogs && !before.hogs) w.hogTimer = HOG.maxGap;
+  if (now.stones && !before.stones) w.stoneTimer = STONE.maxGap;
+  if (now.spikes && !before.spikes) w.spikeTimer = SPIKE.warn + SPIKE.minGap;
 }
 
 /**
@@ -564,12 +615,13 @@ function updateWashing(w) {
   }
 }
 
-/** Кидає жереб, чи буде поточний рівень із шипами. */
+/** Вмикає шипи відповідно до режиму й сходинки рівня. */
 function rollSpikes(w) {
-  // У хардкорі жереба немає: шипи є на кожному рівні, включно з першим.
-  // У тім-апі, навпаки, шипів немає зовсім: у нього свої пастки, і дві системи
-  // загроз одночасно перетворили б екран на кашу.
-  w.spikesOn = w.hardcore || (!w.team && w.level >= SPIKE.firstLevel && Math.random() < SPIKE.levelChance);
+  // У хардкорі шипи є на кожному рівні, включно з першим. У тім-апі їх немає
+  // зовсім: у нього свої пастки, і дві системи загроз одночасно перетворили б
+  // екран на кашу. У класиці вирішують сходи — з другого рівня.
+  const r = rung(w);
+  w.spikesOn = w.hardcore || (r ? r.spikes : false);
   w.spikes.length = 0;
   w.spikeTimer = SPIKE.minGap;
 }
@@ -626,7 +678,7 @@ function updateSpikes(w, dt) {
   if (!w.spikesOn) return;
   w.spikeTimer -= dt;
   if (w.spikeTimer > 0) return;
-  w.spikeTimer = SPIKE.minGap + Math.random() * (SPIKE.maxGap - SPIKE.minGap);
+  w.spikeTimer = (SPIKE.minGap + Math.random() * (SPIKE.maxGap - SPIKE.minGap)) * gapMul(w);
 
   // Цілимось приблизно під кульку, але з розкидом — щоб шип був загрозою,
   // від якої все ж можна відвести кульку вбік.
@@ -673,7 +725,7 @@ function spikeHitsBalloon(b, x, y) {
  * почне падати. Хардкор має бути важким, а не підступним.
  */
 function updateStones(w, dt) {
-  if (!w.hardcore || w.state !== 'playing') return;
+  if (!stonesInMode(w) || w.state !== 'playing') return;
 
   for (let i = w.stones.length - 1; i >= 0; i--) {
     const s = w.stones[i];
@@ -724,7 +776,7 @@ function updateStones(w, dt) {
 
   w.stoneTimer -= dt;
   if (w.stoneTimer > 0) return;
-  w.stoneTimer = STONE.minGap + Math.random() * (STONE.maxGap - STONE.minGap);
+  w.stoneTimer = (STONE.minGap + Math.random() * (STONE.maxGap - STONE.minGap)) * gapMul(w);
 
   // Цілимось приблизно над кулькою — з розкидом, як і шипи: камінь майже завжди
   // справжня загроза, але кульку встигаєш відвести вбік.
@@ -898,7 +950,7 @@ function updateHogs(w, dt) {
 
   w.hogTimer -= dt;
   if (w.hogTimer > 0) return;
-  w.hogTimer = HOG.minGap + Math.random() * (HOG.maxGap - HOG.minGap);
+  w.hogTimer = (HOG.minGap + Math.random() * (HOG.maxGap - HOG.minGap)) * gapMul(w);
   const fromLeft = Math.random() < 0.5;
   w.hogs.push({
     id: ++w.hogSeq,
@@ -910,9 +962,141 @@ function updateHogs(w, dt) {
   w.events.push({ type: 'hog', x: w.hogs.at(-1).x, y: FLOOR_Y, player: -1 });
 }
 
+/**
+ * Скунси. На відміну від усіх інших загроз, ця полює не на кульку, а на
+ * ГРАВЦЯ: підбігає під його персонажа, дві секунди сичить і лишає стовп газу.
+ *
+ * Через це і рятунок тут інший. Від їжачка рятує висота, від каменя — крок
+ * убік, а від газу — або крок убік, або рукавичка. Два виходи замість одного:
+ * хмара стоїть довго, і «просто відлети» не завжди можливо, коли кульку саме
+ * треба підбивати.
+ */
+function updateSkunks(w, dt) {
+  if (!w.hardcore || w.state !== 'playing') return;
+
+  // Хмари живуть своїм життям і труять усіх, хто в них без рукавички.
+  for (let i = w.gas.length - 1; i >= 0; i--) {
+    const g = w.gas[i];
+    g.life -= dt;
+    if (g.life <= 0) { w.gas.splice(i, 1); continue; }
+  }
+  for (const h of w.hands) {
+    if (!h.active || h.out) continue;
+    if (h.gloveOn > 0 || !inGas(w, h.x, h.y)) { h.gasT = 0; continue; }
+    h.gasT += dt;
+    if (h.gasT < SKUNK.tick) continue;
+    h.gasT -= SKUNK.tick;
+    gasHurt(w, h);
+    if (w.state !== 'playing') return;
+  }
+
+  for (let i = w.skunks.length - 1; i >= 0; i--) {
+    const s = w.skunks[i];
+    s.t += dt;
+
+    if (s.phase === 'leave') {
+      s.x += s.dir * SKUNK.speed * 1.3 * dt;
+      if (s.x < -120 || s.x > WORLD.w + 120) w.skunks.splice(i, 1);
+      continue;
+    }
+
+    if (s.phase === 'hiss') {
+      s.hiss -= dt;
+      if (s.hiss > 0) continue;
+      w.gas.push({ id: s.id, x: s.x, life: SKUNK.gasTime });
+      w.events.push({ type: 'gas', x: s.x, y: FLOOR_Y - 120, player: -1 });
+      s.phase = 'leave';
+      s.dir = s.x < WORLD.w / 2 ? -1 : 1;
+      continue;
+    }
+
+    // Біжить під найближчого гравця — саме під гравця, а не під кульку.
+    const target = nearestHand(w, s.x);
+    if (!target) { s.phase = 'leave'; s.dir = s.x < WORLD.w / 2 ? -1 : 1; continue; }
+    const dx = target.x - s.x;
+    s.dir = dx >= 0 ? 1 : -1;
+    s.x += s.dir * Math.min(Math.abs(dx), SKUNK.speed * dt);
+    if (Math.abs(dx) < SKUNK.aimGap) {
+      s.phase = 'hiss';
+      s.hiss = SKUNK.warn;
+      w.events.push({ type: 'skunkWarn', x: s.x, y: FLOOR_Y, player: -1 });
+    } else if (s.t > SKUNK.leaveAfter) {
+      s.phase = 'leave';
+      s.dir = s.x < WORLD.w / 2 ? -1 : 1;
+    }
+  }
+
+  w.skunkTimer -= dt;
+  if (w.skunkTimer > 0) return;
+  w.skunkTimer = SKUNK.minGap + Math.random() * (SKUNK.maxGap - SKUNK.minGap);
+  const fromLeft = Math.random() < 0.5;
+  w.skunks.push({
+    id: ++w.skunkSeq,
+    x: fromLeft ? -60 : WORLD.w + 60,
+    y: FLOOR_Y,
+    dir: fromLeft ? 1 : -1, t: 0, hiss: 0,
+    phase: 'run',
+  });
+  w.events.push({ type: 'skunk', x: w.skunks.at(-1).x, y: FLOOR_Y, player: -1 });
+}
+
+/** Чи точка всередині якоїсь хмари газу. Хмара — висока вузька еліпса. */
+function inGas(w, x, y) {
+  for (const g of w.gas) {
+    const dx = (x - g.x) / SKUNK.gasW;
+    const dy = (y - (FLOOR_Y - SKUNK.gasH / 2)) / (SKUNK.gasH / 2);
+    if (dx * dx + dy * dy <= 1) return true;
+  }
+  return false;
+}
+
+function nearestHand(w, x) {
+  let best = null;
+  let bd = Infinity;
+  for (const h of w.hands) {
+    if (!h.active || h.out) continue;
+    const d = Math.abs(h.x - x);
+    if (d < bd) { bd = d; best = h; }
+  }
+  return best;
+}
+
+/**
+ * Газ забирає серце, але НЕ роняє кульку: `loseLives` відродив би її й скинув
+ * усі загрози, тобто отруєння ще й рятувало б від скунса. Тут лише серце —
+ * кулька тим часом і далі летить, і її все одно треба тримати.
+ */
+function gasHurt(w, h) {
+  w.lives = Math.max(0, w.lives - 1);
+  w.events.push({ type: 'choke', x: h.x, y: h.y, player: h.player, level: w.lives });
+  if (w.lives <= 0) w.state = 'over';
+}
+
+/**
+ * Вдягнути рукавичку. Як аптечка й шал, повертає подію, а не кладе її у
+ * `w.events`: кнопку тиснуть між кроками світу, а `step()` чистить події на
+ * початку кожного кроку.
+ */
+export function useGlove(w, handId) {
+  if (w.state === 'over' || !w.hardcore) return null;
+  const h = getHand(w, handId);
+  if (!h || h.gloves <= 0 || h.gloveOn > 0) return null;
+  h.gloves--;
+  h.gloveOn = SKUNK.gloveTime;
+  h.gasT = 0;
+  return { type: 'glove', x: h.x, y: h.y, player: h.player, level: h.gloves };
+}
+
 /** У дитячій грі їжачків немає: вони живуть у «дорослих» режимах. */
 function hogsInMode(w) {
-  return w.hardcore || w.team;
+  const r = rung(w);
+  return w.hardcore || w.team || !!(r && r.hogs);
+}
+
+/** Камінці — хардкорна загроза згори; у класиці їх відмикає сходинка рівня. */
+function stonesInMode(w) {
+  const r = rung(w);
+  return w.hardcore || !!(r && r.stones);
 }
 
 function hogHitsBalloon(b, x, y) {
@@ -997,6 +1181,12 @@ function clearHazards(w) {
   w.spikeTimer = SPIKE.minGap;
   w.stones.length = 0;
   w.stoneTimer = STONE.maxGap;
+  // Скунса не чіпаємо ЗОВСІМ: він полює на гравця, а не на кульку, тож
+  // відродження кульки його не стосується. Спершу він прибирався тут разом з
+  // усіма — і в хардкорі це виходило безглуздям: будь-який камінь скасовував
+  // скунса посеред сичання, і за 80 секунд мережевої гри жоден так і не встиг
+  // пустити газ. Зникає він тільки на новій партії (`restart`).
+  for (const h of w.hands) h.gasT = 0;
   w.hogs.length = 0;
   // Після падіння їжачка з поля прибираємо (доганяти щойно відроджену кульку —
   // нечесно), але відлік скидаємо лише наполовину: з повним `minGap` гравець,
@@ -1069,6 +1259,7 @@ function moveHands(w, dt) {
     }
     if (h.slow > 0) h.slow = Math.max(0, h.slow - dt);
     if (h.rage > 0) h.rage = Math.max(0, h.rage - dt);
+    if (h.gloveOn > 0) h.gloveOn = Math.max(0, h.gloveOn - dt);
     if (h.flash > 0) h.flash -= dt * 3;
   }
 }
@@ -1495,6 +1686,9 @@ export function restart(w) {
   w.trapTimer = TRAP.firstDelay;
   w.hogs.length = 0;
   w.hogTimer = HOG.maxGap;
+  w.skunks.length = 0;
+  w.gas.length = 0;
+  w.skunkTimer = SKUNK.firstDelay;
   w.buff.speed = 0;
   w.buff.size = 0;
   w.bestCombo = 0;
@@ -1506,10 +1700,11 @@ export function restart(w) {
   w.events.length = 0;
   spawnBalloon(w, WORLD.w / 2, 220);
   w.poops.length = 0;
-  rollSpikes(w);   // у хардкорі шипи є вже на першому рівні, тож жереб — одразу
+  rollSpikes(w);   // у хардкорі шипи є вже на першому рівні; у класиці сходинка 1 їх вимикає
   for (const h of w.hands) {
     h.touching = false; h.slow = 0; h.rage = 0; h.rages = RAGE.perLevel; h.dirty = false;
     h.web = 0; h.shield = 0; h.out = false; h.lives = teamLives(h);
+    h.gloveOn = 0; h.gloves = SKUNK.glovePerLevel; h.gasT = 0;
   }
 }
 

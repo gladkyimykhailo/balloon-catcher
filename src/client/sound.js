@@ -83,6 +83,12 @@ export const sfx = {
     blip({ freq: 300, to: 60, dur: 0.3, type: 'square', gain: 0.2 });
     setTimeout(() => blip({ freq: 140, to: 40, dur: 0.5, type: 'sawtooth', gain: 0.16 }), 60);
   },
+  // Газ пішов — довге шипіння.
+  gas() { blip({ freq: 1100, to: 260, dur: 0.7, type: 'sawtooth', gain: 0.09 }); },
+  // Задихаєшся — двійко коротких кашлів.
+  choke() {
+    [0, 160].forEach((d) => setTimeout(() => blip({ freq: 300, to: 120, dur: 0.13, type: 'square', gain: 0.14 }), d));
+  },
   // Їжачок вибіг — квапливе пирхання.
   hog() {
     [0, 110, 220].forEach((d) => setTimeout(() => blip({ freq: 340, to: 240, dur: 0.07, type: 'square', gain: 0.09 }), d));

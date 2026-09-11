@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, setChar, setPerks, useRage, canTap, maxLivesOf } from '../src/shared/physics.js';
+import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, setChar, setPerks, useRage, useGlove, canTap, maxLivesOf } from '../src/shared/physics.js';
 import { TICK, MAX_PLAYERS, rulesFor, modeOf } from '../src/shared/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -121,7 +121,7 @@ function snapshot(room) {
       h.glove, +h.rage.toFixed(2), h.rages, h.dirty ? 1 : 0, h.char,
       // Правило черги рахує сервер: клієнт отримує готове «можеш / не можеш».
       h.lives, h.out ? 1 : 0, +h.web.toFixed(2), h.shield, w.team && !canTap(w, h) && !h.out && h.web <= 0 ? 1 : 0,
-      maxLivesOf(w, h),
+      maxLivesOf(w, h), +h.gloveOn.toFixed(2), h.gloves,
     ]),
     g: w.gull ? [Math.round(w.gull.x), Math.round(w.gull.y), w.gull.dir, +w.gull.flap.toFixed(2)] : null,
     df: +w.deflate.toFixed(2),
@@ -133,11 +133,12 @@ function snapshot(room) {
     md: w.mode,
     tp: w.traps.map((t) => [t.id, Math.round(t.x), Math.round(t.y), t.type === 'web' ? 1 : 0, Math.round(t.life * 10)]),
     hg: w.hogs.map((h) => [h.id, Math.round(h.x), Math.round(h.y), h.dir, Math.round(h.spin * 100), ['run', 'jump', 'leave'].indexOf(h.phase)]),
+    sk: w.skunks.map((s) => [s.id, Math.round(s.x), s.dir, ['run', 'hiss', 'leave'].indexOf(s.phase)]),
+    gz: w.gas.map((g) => [g.id, Math.round(g.x), Math.round(g.life * 10)]),
     cb: w.combo,
     bf: [Math.round(w.buff.speed * 10), Math.round(w.buff.size * 10)],
     mk: w.medkits,
     sk: w.skin,
-    so: w.spikesOn ? 1 : 0,
     sc: w.score,
     lv: w.lives,
     st: w.paused ? 'waiting' : w.state,
@@ -215,6 +216,11 @@ wss.on('connection', (ws) => {
     } else if (m.t === 'perks') {
       // Перки тім-апа: особисті, але командні з них діють на всю кімнату.
       setPerks(ws.room.world, ws.handId, Number(m.m) || 0);
+    } else if (m.t === 'wear') {
+      // Рукавичка від газу — річ особиста, як шал: сервер вдягає її саме тому,
+      // хто натиснув.
+      const ev = useGlove(ws.room.world, ws.handId);
+      if (ev) ws.room.pending.push(ev);
     } else if (m.t === 'rage') {
       const ev = useRage(ws.room.world, ws.handId);
       if (ev) ws.room.pending.push(ev);

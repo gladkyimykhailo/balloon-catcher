@@ -1,5 +1,5 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, HOG, hogReachY, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, bucketSpots } from '../shared/constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, HOG, SKUNK, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, ladderAt, bucketSpots } from '../shared/constants.js';
 
 const BAR_W = 360;
 const BAR_H = 24;
@@ -43,6 +43,10 @@ export class Renderer {
     // Їжачки — перед кулькою, як і камінці: момент удару має бути видно, а не
     // ховатись за оболонкою.
     this.hogsG = new Graphics();
+    this.skunksG = new Graphics();
+    // Газ — поверх усього, крім HUD: гравець має бачити, що він саме В хмарі,
+    // а не поруч із нею.
+    this.gasG = new Graphics();
     this.poopsG = new Graphics();
     this.shadowG = new Graphics();
     this.handLayer = new Container();
@@ -50,7 +54,7 @@ export class Renderer {
     this.hud = new Container();
     // Камінці — над кулькою: вони падають на неї згори, і ховати їх за
     // оболонкою означало б втратити саме той кадр, у якому ще можна відвести.
-    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.hogsG, this.gull, this.handLayer, this.fx, this.hud);
+    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.hogsG, this.skunksG, this.gull, this.handLayer, this.gasG, this.fx, this.hud);
 
     // Відблиск малюємо один раз в одиничних координатах і далі лише
     // масштабуємо/повертаємо — так він виглядає як нахилений полиск, а не як цифра.
@@ -324,6 +328,7 @@ export class Renderer {
     this.drawStones(view.stones, dt);
     this.drawTraps(view.traps, dt);
     this.drawHogs(view.hogs, dt);
+    this.drawSkunks(view.skunks, view.gas, dt);
     this.drawPoops(view.poops);
 
     const alive = new Set();
@@ -376,6 +381,17 @@ export class Renderer {
         h.lockRing.visible = true;
       } else if (h.lockRing) {
         h.lockRing.visible = false;
+      }
+      // Вдягнена рукавичка — зелене кільце: видно, що газ цьому персонажу
+      // вже не страшний.
+      if (hd.gloveOn > 0) {
+        if (!h.gloveRing) { h.gloveRing = new Graphics(); h.view.addChildAt(h.gloveRing, 0); }
+        h.gloveRing.clear();
+        h.gloveRing.circle(0, 0, 86).fill({ color: 0x9ad36b, alpha: 0.12 })
+          .stroke({ width: 5, color: 0x3ec46d, alpha: 0.75 });
+        h.gloveRing.visible = true;
+      } else if (h.gloveRing) {
+        h.gloveRing.visible = false;
       }
       // Щит — рівне блакитне кільце, щоб не плутати з пульсуючим шалом.
       if (hd.shield > 0) {
@@ -442,10 +458,12 @@ export class Renderer {
       this.barFill.roundRect(-BAR_W / 2 + 6, -BAR_H / 2 + 5, Math.max(0, w - 6), 5, 2.5)
         .fill({ color: 0xffffff, alpha: 0.45 });
     }
-    // У хардкорі шипи є завжди, тож ⚠ там нічого не повідомляє — його місце
-    // займає череп самого режиму.
+    // У хардкорі загрози однакові на всіх рівнях, тож значки там нічого не
+    // повідомляють — їхнє місце займає череп самого режиму. У класиці ж
+    // значки — це коротка пам'ятка, що саме вже прокинулось на цьому рівні.
+    const icons = view.hardcore || view.team ? '' : ladderAt(li.level).icons;
     this.levelText.text = (view.hardcore ? '☠ ' : '') + 'Рівень ' + li.level
-      + (view.spikesOn && !view.hardcore ? ' ⚠' : '');
+      + (icons ? ' ' + icons : '');
     this.progText.text = li.progress + ' / ' + li.target;
     this.barPulse = Math.max(0, this.barPulse - dt * 2);
     this.levelBar.scale.set(1 + this.barPulse * 0.18);
@@ -620,6 +638,72 @@ export class Renderer {
         const step = Math.sin(this.hogT * 16) * r * 0.22;
         g.ellipse(h.x - r * 0.35 + step, h.y + r * 0.92, r * 0.2, r * 0.12).fill(0x8a6134);
         g.ellipse(h.x + r * 0.35 - step, h.y + r * 0.92, r * 0.2, r * 0.12).fill(0x8a6134);
+      }
+    }
+  }
+
+  /**
+   * Скунси й газ. Хмару малюємо високою і вузькою — рівно такою, якою її
+   * бачить фізика (`SKUNK.gasW/gasH`), інакше гравець ухилявся б від картинки,
+   * а труївся від чогось іншого.
+   */
+  drawSkunks(skunks, gas, dt) {
+    const sg = this.skunksG;
+    const gg = this.gasG;
+    sg.clear();
+    gg.clear();
+    this.skunkT = (this.skunkT ?? 0) + dt;
+
+    for (const g of gas ?? []) {
+      const fade = g.life < 1.2 ? g.life / 1.2 : 1;
+      const cy = FLOOR_Y - SKUNK.gasH / 2;
+      gg.ellipse(g.x, cy, SKUNK.gasW, SKUNK.gasH / 2).fill({ color: 0x9ad36b, alpha: 0.22 * fade });
+      gg.ellipse(g.x, cy, SKUNK.gasW * 0.7, SKUNK.gasH * 0.42).fill({ color: 0xb6e08c, alpha: 0.18 * fade });
+      // Клуби, що поволі підіймаються, — видно, що хмара жива.
+      for (let i = 0; i < 9; i++) {
+        const ph = this.skunkT * 0.5 + i * 0.7;
+        const up = ((ph % 1) + 1) % 1;
+        const r = 16 + (i % 3) * 9;
+        gg.circle(
+          g.x + Math.sin(ph * 2 + i) * SKUNK.gasW * 0.55,
+          FLOOR_Y - up * SKUNK.gasH,
+          r,
+        ).fill({ color: 0xcdeca8, alpha: 0.2 * (1 - up) * fade });
+      }
+    }
+
+    for (const s of skunks ?? []) {
+      const y = FLOOR_Y;
+      const hissing = s.phase === 'hiss';
+      // Поки сичить — тремтить і задирає хвіст: це і є попередження.
+      const shake = hissing ? Math.sin(this.skunkT * 30) * 3 : 0;
+      const x = s.x + shake;
+      const f = s.dir;
+      const r = SKUNK.r;
+      // Тіло сидить НА лінії підлоги, а не по центру на ній: інакше половина
+      // звіра ховається в траві й на екрані лишається чорна пляма.
+      const by = y - r * 0.62;
+      sg.ellipse(x, y + 4, r * 0.95, 8).fill({ color: 0x000000, alpha: 0.18 });
+      // Хвіст: у спокої лежить, у сичанні стоїть трубою.
+      const tailUp = hissing ? 1 : 0.4;
+      sg.ellipse(x - f * r * 0.95, by - r * tailUp * 1.15, r * 0.34, r * (0.6 + tailUp * 0.55))
+        .fill(0x1d1d22).stroke({ width: 3, color: 0x000000 });
+      sg.ellipse(x - f * r * 0.95, by - r * tailUp * 1.5, r * 0.17, r * 0.38).fill(0xf3f3ef);
+      // Тіло й біла смуга вздовж спини.
+      sg.ellipse(x, by, r * 0.92, r * 0.62).fill(0x1d1d22).stroke({ width: 3, color: 0x000000 });
+      sg.ellipse(x, by - r * 0.42, r * 0.46, r * 0.2).fill(0xf3f3ef);
+      // Морда.
+      sg.circle(x + f * r * 0.78, by - r * 0.06, r * 0.42).fill(0x1d1d22).stroke({ width: 3, color: 0x000000 });
+      sg.moveTo(x + f * r * 0.78, by - r * 0.42).lineTo(x + f * r * 1.18, by - r * 0.02)
+        .lineTo(x + f * r * 0.78, by + r * 0.3).closePath().fill(0x1d1d22);
+      sg.circle(x + f * r * 1.14, by - r * 0.04, r * 0.11).fill(0xff8fb1);
+      sg.circle(x + f * r * 0.72, by - r * 0.24, r * 0.1).fill(0xffffff);
+      sg.circle(x + f * r * 0.74, by - r * 0.24, r * 0.05).fill(0x1d1d22);
+      // Лапки в русі.
+      if (!hissing) {
+        const step = Math.sin(this.skunkT * 15) * r * 0.2;
+        sg.ellipse(x - r * 0.35 + step, y - r * 0.08, r * 0.19, r * 0.13).fill(0x1d1d22);
+        sg.ellipse(x + r * 0.35 - step, y - r * 0.08, r * 0.19, r * 0.13).fill(0x1d1d22);
       }
     }
   }
