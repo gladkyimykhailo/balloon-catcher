@@ -41,16 +41,12 @@ async function boot() {
   $('#btn-local2').onclick = () => startLocal(2);
   $('#btn-hc').onclick = () => startLocal(1, 'hardcore');
   $('#btn-hc2').onclick = () => startLocal(2, 'hardcore');
-  $('#btn-hc-host').onclick = () => startOnline('', 'hardcore');
   $('#btn-team2').onclick = () => startLocal(2, 'team');
-  $('#btn-team-host').onclick = () => startOnline('', 'team');
-  $('#btn-host').onclick = () => startOnline('');
-  $('#btn-join').onclick = () => {
-    const code = $('#room-input').value.trim().toUpperCase();
-    if (code.length < 3) { setNote('Введи код кімнати з 4 символів', true); return; }
-    startOnline(code);
-  };
-  $('#room-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btn-join').click(); });
+  // Кімната є в кожного режиму, і влаштована всюди однаково: кнопка «створити»
+  // плюс поле коду поруч.
+  wireRoom('#btn-host', '#btn-join', '#room-input', 'normal');
+  wireRoom('#btn-hc-host', '#btn-hc-join', '#room-hc', 'hardcore');
+  wireRoom('#btn-team-host', '#btn-team-join', '#room-team', 'team');
   $('#btn-menu').onclick = () => toMenu();
   $('#btn-again').onclick = () => doRestart();
   $('#btn-full').onclick = () => (inFullscreen() ? leaveFullscreen() : enterFullscreen());
@@ -64,7 +60,9 @@ async function boot() {
   };
   $('#btn-copy').onclick = async () => {
     try {
-      await navigator.clipboard.writeText(location.origin + location.pathname + '?room=' + game.net.room);
+      // Режим у посиланні потрібен на випадок, коли друг відкриє його раніше,
+      // ніж кімната встигне ожити: тоді вона створиться саме тим режимом.
+      await navigator.clipboard.writeText(inviteLink());
       $('#btn-copy').textContent = 'Скопійовано ✓';
       setTimeout(() => ($('#btn-copy').textContent = 'Копіювати посилання'), 1600);
     } catch { setNote('Скопіюй код вручну: ' + game.net.room, false); }
@@ -108,12 +106,14 @@ async function boot() {
   // Посилання-запрошення — єдиний випадок, коли адресу треба знати ВЖЕ: воно
   // з'єднується саме, не даючи кнопкам шансу з'явитись.
   if (invite) await finding;
-  if (invite) { $('#room-input').value = invite.toUpperCase(); startOnline(invite.toUpperCase()); }
+  if (invite) { $('#room-input').value = invite.toUpperCase(); startOnline(invite.toUpperCase(), kindOf(mode)); }
   else if (mode === 'solo') startLocal(1);
   else if (mode === 'local2') startLocal(2);
   else if (mode === 'hardcore') startLocal(1, 'hardcore');
   else if (mode === 'hardcore2') startLocal(2, 'hardcore');
   else if (mode === 'team') startLocal(2, 'team');
+  // ?host=hardcore — одразу створити кімнату потрібного режиму, не заходячи в меню.
+  else if (q.get('host')) { await finding; startOnline('', kindOf(q.get('host'))); }
 
   renderer.app.ticker.add((t) => frame(Math.min(t.deltaMS / 1000, 1 / 20)));
 }
@@ -385,6 +385,34 @@ function startLocal(players, kind = 'normal') {
     : '';
   showHud(tip + how);
   sfx.start();
+}
+
+/** Посилання-запрошення: код кімнати плюс її режим. */
+function inviteLink() {
+  const url = location.origin + location.pathname + '?room=' + game.net.room;
+  return game.kind === 'normal' ? url : url + '&mode=' + game.kind;
+}
+
+/** Режим світу з рядка: усе незнайоме — звичайна гра. */
+function kindOf(s) {
+  return ['hardcore', 'team'].includes(s) ? s : 'normal';
+}
+
+/**
+ * Один режим — одна пара «створити / приєднатись». Режим тут лише побажання
+ * для НОВОЇ кімнати: якщо за кодом уже грають, діє її режим (див. startOnline),
+ * бо світ у кімнаті один на всіх.
+ */
+function wireRoom(hostSel, joinSel, inputSel, kind) {
+  const input = $(inputSel);
+  const join = () => {
+    const code = input.value.trim().toUpperCase();
+    if (code.length < 3) { setNote('Введи код кімнати з 4 символів', true); return; }
+    startOnline(code, kind);
+  };
+  $(hostSel).onclick = () => startOnline('', kind);
+  $(joinSel).onclick = join;
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 }
 
 async function startOnline(room, kind = 'normal') {

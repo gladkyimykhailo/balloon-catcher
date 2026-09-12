@@ -32,9 +32,7 @@
     max-height: 96vh; overflow-y: auto; }
   /* Статична збірка (GitHub Pages) їде без сервера кімнат: онлайн-кнопки
      там нікуди не ведуть, тож клас no-online прибирає їх з меню. */
-  body.no-online #mp-block,
-  body.no-online #btn-hc-host,
-  body.no-online #btn-team-host { display: none; }
+  body.no-online .online-block { display: none; }
 
   h1 { margin: 0 0 4px; font-size: clamp(28px, 6vw, 44px); }
   .sub { margin: 0 0 20px; opacity: .7; font-size: 16px; }
@@ -190,6 +188,15 @@
       <div class="stack">
         <button id="btn-solo">👋 Грати одному</button>
         <button id="btn-local2" class="blue">👋👋 Вдвох за одним комп'ютером</button>
+        <div class="online-block stack">
+          <div class="divider">кімната для друзів — до 4 гравців</div>
+          <button id="btn-host" class="ghost">🎈 Створити кімнату</button>
+          <div class="row">
+            <input id="room-input" type="text" maxlength="4" placeholder="КОД"
+                   autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+            <button id="btn-join" class="ghost">Приєднатись</button>
+          </div>
+        </div>
       </div>
       <div id="hardcore">
         <div class="divider">☠ хардкор</div>
@@ -203,7 +210,14 @@
             <button id="btn-hc" class="dark">☠ Одному</button>
             <button id="btn-hc2" class="dark">☠ Удвох</button>
           </div>
-          <button id="btn-hc-host" class="dark">☠ Хардкор-кімната для друзів</button>
+          <div class="online-block stack">
+            <button id="btn-hc-host" class="dark">☠ Створити хардкор-кімнату</button>
+            <div class="row">
+              <input id="room-hc" type="text" maxlength="4" placeholder="КОД"
+                     autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+              <button id="btn-hc-join" class="dark">Приєднатись</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -216,21 +230,17 @@
         <div id="perk-pick"><span id="perk-name"></span><span id="perk-ability"></span></div>
         <div class="stack">
           <button id="btn-team2" class="green">🤝 Удвох за одним комп'ютером</button>
-          <button id="btn-team-host" class="green">🤝 Тім-ап кімната для друзів</button>
-        </div>
-      </div>
-
-      <div id="mp-block">
-        <div class="divider">мультиплеєр — до 4 гравців</div>
-        <div class="stack">
-          <button id="btn-host" class="ghost">Створити кімнату</button>
-          <div class="row">
-            <input id="room-input" type="text" maxlength="4" placeholder="КОД"
-                   autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
-            <button id="btn-join" class="ghost">Приєднатись</button>
+          <div class="online-block stack">
+            <button id="btn-team-host" class="green">🤝 Створити тім-ап кімнату</button>
+            <div class="row">
+              <input id="room-team" type="text" maxlength="4" placeholder="КОД"
+                     autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+              <button id="btn-team-join" class="green">Приєднатись</button>
+            </div>
           </div>
         </div>
       </div>
+
       <div id="note" hidden></div>
     </div>
   </div>
