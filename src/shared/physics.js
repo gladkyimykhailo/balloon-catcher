@@ -1,3 +1,5 @@
+import { resetBasketball, stepBasketball, placeBasketballHand } from './basketball.js';
+import { cornerPenalty } from './corner.js';
 // М'яка фізика повітряної кульки.
 //
 // Кулька — це замкнене кільце з N точкових мас. Форму тримають дві сили:
@@ -6,7 +8,7 @@
 //      стискаєш кульку -> площа падає -> тиск росте -> вона випинається деінде.
 // Саме тому вона мнеться від долоні, а потім пружно вистрілює назад.
 
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, SHELL, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, SKUNK, hogReachY, skinAt, gloveAt, handKit, biomeAt, ladderAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, HAND, RULES, LEVELS, GULL, SPIKE, SHELL, MEDKIT, RAGE, POOP, BUCKET, SUBSTEPS, HARDCORE, STONE, TEAM, BUFFS, TRAP, HOG, SKUNK, hogReachY, skinAt, gloveAt, handKit, biomeAt, ladderAt, teamLadderAt, bucketSpots, rulesFor, modeOf, levelScaleFor, hasPerk } from './constants.js';
 
 const TAU = Math.PI * 2;
 
@@ -96,10 +98,12 @@ export function createWorld(mode = 'normal') {
     events: [],            // події для звуку/частинок: {type,x,y,player}
   };
   spawnBalloon(w, WORLD.w / 2, 220);
+  if (m === 'basketball') resetBasketball(w);
   return w;
 }
 
 export function spawnBalloon(w, cx, cy) {
+  w.cornerHold = null;
   const { n, radius, mass, ks, kd, restScale, pressure, aspect, taper } = BALLOON;
 
   // Форма кульки — не коло, а «крапля»: трохи витягнута вгору і звужена донизу.
@@ -182,6 +186,7 @@ export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
   h.char = clampIndex(char);
   h.lives = teamLives(h);
   applyKit(w, h);
+  if (w.mode === 'basketball') placeBasketballHand(h);
   w.hands.push(h);
   return h;
 }
@@ -247,6 +252,7 @@ function buffedKit(w, h) {
  * читала `h.r` і нічого не знала ні про перчатки, ні про персонажів.
  */
 function applyKit(w, h) {
+  if (w.mode === 'basketball') return handKit('normal', 0, 0);
   const kit = kitOf(w, h);
   h.r = HAND.r * kit.sizeMul;
   if (!kit.rage) h.rage = 0;         // не боксерська — шал гасне
@@ -265,6 +271,7 @@ function clampIndex(i) {
 
 /** Хардкор-персонаж. Річ особиста, як і перчатка, тож міняється в одній руці. */
 export function setChar(w, id, i, hand = null) {
+  if (w.mode === 'basketball') return;
   const h = hand ?? getHand(w, id);
   if (!h) return;
   h.char = clampIndex(i);
@@ -276,6 +283,7 @@ export function setChar(w, id, i, hand = null) {
  * далі просто читала `h.r` і нічого не знала про скіни.
  */
 export function setGlove(w, id, i, hand = null) {
+  if (w.mode === 'basketball') return;
   const h = hand ?? getHand(w, id);
   if (!h) return;
   h.glove = clampIndex(i);
@@ -316,6 +324,7 @@ export function useRage(w, handId) {
  * шипа, штраф долоні) мусять бути однакові для всіх, хто грає в цій кімнаті.
  */
 export function setSkin(w, i) {
+  if (w.mode === 'basketball') return;
   w.skin = Math.max(0, Math.min(i | 0, 99));
 }
 
@@ -330,7 +339,7 @@ export function removeHand(w, id) {
 
 export function setHandTarget(w, id, x, y) {
   const h = getHand(w, id);
-  if (!h) return;
+  if (!h || !Number.isFinite(x) || !Number.isFinite(y)) return;
   h.tx = clamp(x, 0, WORLD.w);
   h.ty = clamp(y, 0, WORLD.h);
 }
@@ -338,6 +347,8 @@ export function setHandTarget(w, id, x, y) {
 // ---------------------------------------------------------------- крок світу
 
 export function step(w, dt) {
+  if (!Number.isFinite(dt) || dt <= 0) { w.events.length = 0; return; }
+  if (w.mode === 'basketball') { stepBasketball(w, dt); return; }
   w.time += dt;
   w.tick++;
   w.events.length = 0;
@@ -376,6 +387,27 @@ export function step(w, dt) {
   }
 
   checkFloor(w);
+  if (w.state === 'playing') applyCornerPenalty(w, dt);
+}
+
+function applyCornerPenalty(w, dt) {
+  const eligible = w.hands.filter(h => !w.team || canTap(w, h));
+  const penalty = cornerPenalty(w, dt, eligible);
+  if (!penalty) return;
+  const { holder, damage } = penalty;
+  const target = w.team ? holder : w;
+  target.lives = Math.max(0, target.lives - damage);
+  w.events.push({ type: 'corner', x: holder.x, y: holder.y, player: holder.player });
+  if (w.team && holder.lives === 0) {
+    holder.out = true;
+    w.events.push({ type: 'out', x: holder.x, y: holder.y, player: holder.player });
+    resetCombo(w);
+  }
+  // Keep the balloon in place: continued pinning keeps costing hearts.
+  if (w.team ? w.hands.every(h => h.out) : w.lives === 0) {
+    w.state = 'over';
+    clearHazards(w);
+  }
 }
 
 /**
@@ -472,11 +504,10 @@ function updateGull(w, dt) {
 
 /**
  * Сходинка складності поточного рівня — джерело правди про те, які загрози
- * зараз увімкнені в КЛАСИЦІ. У хардкорі й тім-апі сходів немає (повертає null):
- * там набір загроз задає сам режим, а не номер рівня.
+ * зараз увімкнені в класиці й тім-апі. У хардкорі набір постійний.
  */
 function rung(w) {
-  return w.hardcore || w.team ? null : ladderAt(w.level);
+  return w.hardcore ? null : w.team ? teamLadderAt(w.level) : ladderAt(w.level);
 }
 
 /**
@@ -522,16 +553,15 @@ function onLevelUp(w, lvl) {
 }
 
 /**
- * Дебют нової загрози оголошує банер, а не влучання. Тому тій, що саме
- * увімкнулась на цьому рівні, ставимо ПОВНУ паузу: інакше їжачок міг би
- * вибігти вже за шість секунд (стільки лишає `clearHazards` після падіння) —
- * тобто раніше, ніж гравець дочитає, хто це взагалі такий.
+ * Новій загрозі даємо повну паузу після відкриття рівня,
+ * щоб вона не з'явилася одразу через старий таймер.
  *
  * `before` — сходинка попереднього рівня; null означає режим без сходів.
  */
 function greetNewHazards(w, before) {
   const now = rung(w);
   if (!now || !before) return;
+  if (now.web && !before.web) w.trapTimer = TRAP.firstDelay;
   if (now.gulls && !before.gulls) w.gullTimer = gullPeriod(w);
   if (now.hogs && !before.hogs) w.hogTimer = HOG.maxGap;
   if (now.stones && !before.stones) w.stoneTimer = STONE.maxGap;
@@ -874,16 +904,49 @@ function updateTraps(w, dt) {
     }
   }
 
+  const hazards = teamLadderAt(w.level);
+  if (!hazards.web) return;
   w.trapTimer -= dt;
   if (w.trapTimer > 0) return;
-  w.trapTimer = TRAP.minGap + Math.random() * (TRAP.maxGap - TRAP.minGap);
-  const web = Math.random() < TRAP.webChance;
+  w.trapTimer = trapGap(w);
+  const web = !hazards.tar || Math.random() < TRAP.webChance;
+  spawnTrap(w, web);
+  // Пара: другою йде саме інша пастка, тож гравця тримає павутина, а кульку
+  // тим часом тягне вниз смола. Разом вони злі, але чесні — обидві видно.
+  if (hazards.pairs && Math.random() < TRAP.pairChance) {
+    spawnTrap(w, !web);
+  }
+}
+
+/**
+ * Пауза до наступної пастки. Що вищий рівень, то густіше вони сиплються —
+ * інакше тім-ап з часом ставав спокійнішим за класику, де кожен рівень додає
+ * нову загрозу.
+ */
+function trapGap(w) {
+  return (TRAP.minGap + Math.random() * (TRAP.maxGap - TRAP.minGap)) * gapMul(w);
+}
+
+function spawnTrap(w, web) {
   if (web) {
-    // Павутина висить там, де гравці й літають: між кулькою і підлогою.
+    // Павутина полює на гравців: частіше вона з'являється поруч із чиєюсь
+    // долонею, а не де трапиться. «Поруч» — це кільце від huntNear до huntFar:
+    // ближче вона ловила б у ту ж мить, коли виникла, і ухилитись було б ніяк.
+    const free = w.hands.filter((h) => !h.out && h.web <= 0);
+    const prey = free.length && Math.random() < TRAP.web.huntChance
+      ? free[(Math.random() * free.length) | 0] : null;
+    let x = 90 + Math.random() * (WORLD.w - 180);
+    let y = 300 + Math.random() * (FLOOR_Y - 380);
+    if (prey) {
+      const a = Math.random() * Math.PI * 2;
+      const d = TRAP.web.huntNear + Math.random() * (TRAP.web.huntFar - TRAP.web.huntNear);
+      x = prey.x + Math.cos(a) * d;
+      y = prey.y + Math.sin(a) * d;
+    }
     w.traps.push({
       id: ++w.trapSeq, type: 'web',
-      x: 90 + Math.random() * (WORLD.w - 180),
-      y: 300 + Math.random() * (FLOOR_Y - 380),
+      x: clamp(x, 90, WORLD.w - 90),
+      y: clamp(y, 260, FLOOR_Y - 90),
       life: TRAP.web.life,
     });
   } else {
@@ -1095,10 +1158,10 @@ export function useGlove(w, handId) {
   return { type: 'glove', x: h.x, y: h.y, player: h.player, level: h.gloves };
 }
 
-/** У дитячій грі їжачків немає: вони живуть у «дорослих» режимах. */
+/** Їжачків відкриває сходинка режиму; у хардкорі вони є від початку. */
 function hogsInMode(w) {
   const r = rung(w);
-  return w.hardcore || w.team || !!(r && r.hogs);
+  return w.hardcore || !!(r && r.hogs);
 }
 
 /** Камінці — хардкорна загроза згори; у класиці їх відмикає сходинка рівня. */
@@ -1724,6 +1787,7 @@ function teamLose(w, x, n = 1) {
 }
 
 export function restart(w) {
+  if (w.mode === 'basketball') { resetBasketball(w); return; }
   w.score = 0;
   w.level = 1;
   w.gull = null;

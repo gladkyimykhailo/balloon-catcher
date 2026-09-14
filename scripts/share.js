@@ -16,7 +16,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bin = path.join(root, 'bin', 'cloudflared');
-const PORT = process.env.PORT || 8090;
+// 0 просить ОС виділити вільний порт, не зачіпаючи вже запущені програми.
+const PORT = process.env.PORT || '0';
 
 if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) {
   console.error('Клієнт не зібрано. Спершу: npm run build');
@@ -31,12 +32,29 @@ if (!fs.existsSync(bin)) {
 
 const kids = [];
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
-  stdio: ['ignore', 'inherit', 'inherit'],
+  stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
   env: { ...process.env, PORT },
 });
 kids.push(server);
 
-const tunnel = spawn(bin, ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'], {
+// Не створюємо публічне посилання на сервер, який ще не запустився.
+const readyPort = await new Promise((resolve) => {
+  const fail = () => {
+    console.error('Сервер гри не запустився. Причина в повідомленні вище; публічне посилання не створено.');
+    process.exit(1);
+  };
+  const onError = (error) => { console.error(error.message); fail(); };
+  server.once('error', onError);
+  server.once('exit', fail);
+  server.once('message', (message) => {
+    if (message?.type !== 'listening') return;
+    server.removeListener('error', onError);
+    server.removeListener('exit', fail);
+    resolve(message.port);
+  });
+});
+
+const tunnel = spawn(bin, ['tunnel', '--url', `http://localhost:${readyPort}`, '--no-autoupdate'], {
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 kids.push(tunnel);
@@ -83,13 +101,15 @@ function unpublishWs() {
 
 let announced = false;
 const scan = (chunk) => {
-  const m = String(chunk).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+  // Quick Tunnel має згенероване ім'я зі слів через дефіс.
+  // api.trycloudflare.com у тексті помилки — службова адреса, а не гра.
+  const m = String(chunk).match(/https:\/\/[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com\b/);
   if (!m || announced) return;
   announced = true;
   const url = m[0];
   console.log(`
   ╭──────────────────────────────────────────────────────────────╮
-  │  Гра доступна за посиланням (до 4 гравців у кімнаті):        │
+  │  Гра доступна за посиланням (Basketball — до 8 гравців):        │
   ╰──────────────────────────────────────────────────────────────╯
 
      ${url}
@@ -102,16 +122,31 @@ const scan = (chunk) => {
   publishWs(url);
 };
 tunnel.stdout.on('data', scan);
-tunnel.stderr.on('data', scan);   // cloudflared пише адресу саме в stderr
+tunnel.stderr.on('data', (chunk) => {
+  // Не ховаємо помилки DNS/мережі: без них невдалий запуск виглядав як зависання.
+  process.stderr.write(chunk);
+  scan(chunk);   // cloudflared пише адресу саме в stderr
+});
 
 let leaving = false;
-const bye = () => {
+const bye = (code = 0) => {
   if (leaving) return;          // і SIGINT, і вихід дитини ведуть сюди — прибираємо раз
   leaving = true;
   unpublishWs();
   for (const k of kids) k.kill('SIGTERM');
-  process.exit(0);
+  process.exit(code);
 };
-process.on('SIGINT', bye);
-process.on('SIGTERM', bye);
-for (const k of kids) k.on('exit', bye);
+process.on('SIGINT', () => bye());
+process.on('SIGTERM', () => bye());
+for (const [i, k] of kids.entries()) {
+  const name = i === 0 ? 'Сервер гри' : 'Публічний тунель';
+  k.on('error', (error) => {
+    console.error(`${name} не запустився: ${error.message}`);
+    bye(1);
+  });
+  k.on('exit', (code, signal) => {
+    if (leaving) return;
+    console.error(`${name} зупинився (${signal || code}). Кімнати через це посилання недоступні.`);
+    bye(code || 1);
+  });
+}

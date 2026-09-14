@@ -1,3 +1,4 @@
+import { BASKETBALL, basketballRoster, basketballSeat } from '../src/shared/basketball.js';
 // Сервер мультиплеєра + роздача зібраного клієнта.
 //
 // Фізику рахує сервер (авторитетна симуляція) — обидва браузери бачать
@@ -30,15 +31,20 @@ const MIME = {
 };
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
-  let file = path.join(DIST, decodeURIComponent(url.pathname));
-  if (!file.startsWith(DIST)) return send(res, 403, 'forbidden');
+  let pathname;
+  try { pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname); }
+  catch { return send(res, 400, 'bad request'); }
+  if (pathname.includes('\0')) return send(res, 400, 'bad request');
+  let file = path.resolve(DIST, '.' + pathname);
+  if (file !== DIST && !file.startsWith(DIST + path.sep)) return send(res, 403, 'forbidden');
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, 'index.html');
   if (!fs.existsSync(file)) {
     return send(res, 404, 'Клієнт не зібрано. Запусти: npm run build');
   }
   res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-  fs.createReadStream(file).pipe(res);
+  const stream = fs.createReadStream(file);
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
 });
 
 function send(res, code, text) {
@@ -47,6 +53,20 @@ function send(res, code, text) {
 }
 
 const wss = new WebSocketServer({ server });
+function serverError(error) {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Порт ${PORT} уже зайнятий. Спробуй інший: PORT=8091 npm run share`);
+  } else if (error.code === 'EPERM' || error.code === 'EACCES') {
+    console.error(`Середовище заборонило запуск сервера на порту ${PORT} (${error.code}). Запусти команду у звичайному терміналі комп'ютера.`);
+  } else {
+    console.error(`Помилка сервера (${error.code || 'невідома'}): ${error.message}`);
+  }
+  process.exit(1);
+}
+// ws пересилає помилки HTTP-сервера: обробляємо обидва джерела,
+// щоб замість необробленого винятку показати причину зупинки.
+wss.on('error', serverError);
+server.on('error', serverError);
 const rooms = new Map();
 
 function makeCode() {
@@ -132,14 +152,17 @@ function snapshot(room) {
     // більше місця в снапшоті, ніж уся решта каменя.
     sn: w.stones.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fall' ? 1 : 0, s.dead ? 1 : 0, Math.round(s.spin * 100)]),
     md: w.mode,
+    bk: w.basketball ? { score: w.basketball.score, winner: w.basketball.winner, serve: w.basketball.serve, round: w.basketball.round, angle: w.basketball.angle } : null,
     tp: w.traps.map((t) => [t.id, Math.round(t.x), Math.round(t.y), t.type === 'web' ? 1 : 0, Math.round(t.life * 10)]),
     hg: w.hogs.map((h) => [h.id, Math.round(h.x), Math.round(h.y), h.dir, Math.round(h.spin * 100), ['run', 'jump', 'leave'].indexOf(h.phase)]),
+    // Скунси — `sk`, скін кульки — `si`: два різні ключі. Колись обидва поля
+    // їхали як `sk`, і скін затирав скунсів, а клієнт падав на `(число).map`.
     sk: w.skunks.map((s) => [s.id, Math.round(s.x), s.dir, ['run', 'hiss', 'leave'].indexOf(s.phase)]),
     gz: w.gas.map((g) => [g.id, Math.round(g.x), Math.round(g.life * 10)]),
     cb: w.combo,
     bf: [Math.round(w.buff.speed * 10), Math.round(w.buff.size * 10)],
     mk: w.medkits,
-    sk: w.skin,
+    si: w.skin,
     sc: w.score,
     lv: w.lives,
     st: w.paused ? 'waiting' : w.state,
@@ -154,6 +177,12 @@ function broadcast(room, obj) {
   }
 }
 
+function hasOpponents(room) {
+  return room.mode === 'basketball'
+    ? basketballRoster([...room.clients].map(c => c.side)).every(n => n > 0)
+    : room.clients.size >= 2;
+}
+
 function announce(room) {
   broadcast(room, {
     t: 'peers',
@@ -163,39 +192,48 @@ function announce(room) {
 }
 
 wss.on('connection', (ws) => {
+  ws.on('error', () => ws.terminate());
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', (raw) => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return;
 
     if (m.t === 'join') {
       if (ws.room) return;
-      const code = (m.room || '').toUpperCase().trim() || makeCode();
-      const room = getRoom(code, m.mode || (m.hc ? 'hardcore' : 'normal'));
-      if (room.clients.size >= MAX_PLAYERS) {
-        ws.send(JSON.stringify({ t: 'error', msg: `У цій кімнаті вже ${MAX_PLAYERS} гравці` }));
+      if (m.room != null && typeof m.room !== 'string') return;
+      const requested = (m.room ?? '').toUpperCase().trim();
+      if (requested && !/^[A-Z0-9]{4}$/.test(requested)) {
+        ws.send(JSON.stringify({ t: 'error', msg: 'Введи код кімнати з 4 літер або цифр' }));
         return;
       }
-      // Беремо найменший вільний номер, щоб той, хто вийшов, звільнив своє місце.
+      const code = requested || makeCode();
+      const room = getRoom(code, m.mode || (m.hc ? 'hardcore' : 'normal'));
+      const maxPlayers = room.mode === 'basketball' ? BASKETBALL.teamSize * 2 : MAX_PLAYERS;
+      if (room.clients.size >= maxPlayers) {
+        ws.send(JSON.stringify({ t: 'error', msg: `У цій кімнаті вже ${maxPlayers} гравці` }));
+        return;
+      }
+      // Basketball поповнює меншу команду; інші режими беруть перший вільний слот.
       const taken = new Set([...room.clients].map((c) => c.side));
-      let side = 0;
-      while (taken.has(side)) side++;
+      let side = room.mode === 'basketball' ? basketballSeat(taken) : 0;
+      if (room.mode !== 'basketball') while (taken.has(side)) side++;
       ws.side = side;
       ws.room = room;
       ws.handId = 'p' + ws.side;
       room.clients.add(ws);
       addHand(room.world, ws.handId, ws.side);
-      // Гра стартує лише коли зібралось двоє — інакше перший гравець
-      // встиг би розгубити всі життя, поки чекає на друга.
-      if (room.clients.size >= 2 && room.world.paused) {
+      // Basketball починається, коли є гравець у кожній команді; решта може доєднатись.
+      if (hasOpponents(room) && room.world.paused) {
         room.world.paused = false;
-        restart(room.world);
+        if (room.mode !== 'basketball') restart(room.world);
       }
       ws.send(JSON.stringify({
         t: 'welcome', room: code, side: ws.side, mode: room.mode,
-        maxLives: rulesFor(room.mode).lives, maxPlayers: MAX_PLAYERS, hc: room.mode === 'hardcore' ? 1 : 0,
+        sides: [...room.clients].map(c => c.side),
+        maxLives: rulesFor(room.mode).lives, maxPlayers, hc: room.mode === 'hardcore' ? 1 : 0,
       }));
       announce(room);
       return;
@@ -207,6 +245,7 @@ wss.on('connection', (ws) => {
       setHandTarget(ws.room.world, ws.handId, m.x, m.y);
     } else if (m.t === 'restart') {
       restart(ws.room.world);
+      ws.room.pending.length = 0;
       broadcast(ws.room, { t: 'restarted' });
     } else if (m.t === 'glove') {
       // Перчатка особиста, тож міняємо саме долоню того, хто прислав.
@@ -244,20 +283,24 @@ wss.on('connection', (ws) => {
     removeHand(room.world, ws.handId);
     if (room.clients.size === 0) { closeRoom(room); return; }
     // Пауза лише коли лишився один: якщо з чотирьох пішов один, гра триває.
-    if (room.clients.size < 2) room.world.paused = true;
+    if (!hasOpponents(room)) room.world.paused = true;
     announce(room);
   });
 });
 
 // Killed-tab detection: інакше кімната лишається "повною" з привидом.
+// 8 секунд, а не хвилина: той, у кого обірвалась мережа, повертається в ту саму
+// кімнату — і має застати своє місце вже вільним.
 setInterval(() => {
   for (const ws of wss.clients) {
     if (!ws.isAlive) { ws.terminate(); continue; }
     ws.isAlive = false;
     ws.ping();
   }
-}, 15000);
+}, 8000);
 
 server.listen(PORT, () => {
-  console.log(`Кулька: сервер на http://localhost:${PORT}  (ws на тому ж порту)`);
+  const port = server.address().port;
+  console.log(`Кулька: сервер на http://localhost:${port}  (ws на тому ж порту)`);
+  if (process.send) process.send({ type: 'listening', port });
 });

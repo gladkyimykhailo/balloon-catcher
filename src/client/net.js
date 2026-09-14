@@ -13,10 +13,12 @@ export class Net {
     this.side = 0;
     this.room = '';
     this.peers = 1;
+    this.sides = [];
     this.maxLives = 3;
     this.maxPlayers = 4;
     this.mode = 'normal';     // режим кімнати; його вирішує сервер, а не клієнт
     this.hardcore = false;
+    this.closing = false;     // чи ми самі закрили сокет (див. onStatus 'closed')
     this.offset = null;       // різниця годинників клієнта і сервера
     this.onEvent = () => {};
     this.onStatus = () => {};
@@ -33,6 +35,13 @@ export class Net {
       const ws = new WebSocket(url);
       this.ws = ws;
       let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.closing = true;
+        ws.close();
+        reject(new Error('Сервер не відповів вчасно'));
+      }, 10000);
 
       ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '', mode }));
 
@@ -40,31 +49,43 @@ export class Net {
         const m = JSON.parse(e.data);
         if (m.t === 'welcome') {
           this.side = m.side;
+          this.sides = m.sides ?? [m.side];
+          this.peers = this.sides.length;
           this.room = m.room;
           this.maxLives = m.maxLives;
           this.maxPlayers = m.maxPlayers ?? 4;
           this.mode = m.mode || (m.hc ? 'hardcore' : 'normal');
           this.hardcore = this.mode === 'hardcore';
+          clearTimeout(timeout);
           settled = true;
           resolve(m);
         } else if (m.t === 'snap') {
           this.push(m);
         } else if (m.t === 'peers') {
           this.peers = m.n;
+          this.sides = m.sides ?? this.sides;
           this.onStatus(m);
         } else if (m.t === 'restarted') {
           this.buf.length = 0;
         } else if (m.t === 'error') {
+          clearTimeout(timeout);
           this.onError(m.msg);
-          if (!settled) { settled = true; reject(new Error(m.msg)); }
+          // `fromServer` відрізняє «сервер відповів і відмовив» (кімната повна)
+          // від «сервера взагалі нема»: порада «запусти сервер» доречна лише в
+          // другому випадку.
+          if (!settled) { settled = true; reject(Object.assign(new Error(m.msg), { fromServer: true })); }
+          this.closing = true;
           ws.close();
         }
       };
 
-      ws.onerror = () => { if (!settled) { settled = true; reject(new Error("Не вдалося під'єднатися до сервера")); } };
+      ws.onerror = () => { clearTimeout(timeout); if (!settled) { settled = true; reject(new Error("Не вдалося під'єднатися до сервера")); } };
       ws.onclose = () => {
+        clearTimeout(timeout);
         if (!settled) { settled = true; reject(new Error("З'єднання закрито")); }
-        else this.onStatus({ t: 'closed' });
+        // `clean` — це «ми пішли самі» (меню, нова кімната): такий обрив не
+        // треба лікувати перепід'єднанням.
+        else this.onStatus({ t: 'closed', clean: this.closing });
       };
     });
   }
@@ -122,7 +143,7 @@ export class Net {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'rage' }));
   }
 
-  close() { this.ws?.close(); }
+  close() { this.closing = true; this.ws?.close(); }
 
   /** Стан світу для рендера: інтерпольований між двома снапшотами. */
   sample() {
@@ -137,6 +158,7 @@ export class Net {
     }
     if (t >= this.buf[n - 1].local) { a = b = this.buf[n - 1]; }
 
+    if (b.bk && (a.bk?.round !== b.bk.round || a.st !== b.st)) a = b;
     const span = b.local - a.local;
     const k = span > 0 ? Math.max(0, Math.min(1, (t - a.local) / span)) : 1;
 
@@ -236,11 +258,12 @@ export class Net {
 
     return {
       points, hands, gull, spikes, poops, stones, traps, hogs, skunks, gas,
+      basketball: b.bk ?? null,
       deflate: b.df ?? 0,
       mode: b.md || 'normal', hardcore: b.md === 'hardcore', team: b.md === 'team',
       combo: b.cb ?? 0, buff: { speed: (b.bf?.[0] ?? 0) / 10, size: (b.bf?.[1] ?? 0) / 10 },
       score: b.sc, lives: b.lv, state: b.st,
-      medkits: b.mk ?? 0, skin: b.sk ?? 0,
+      medkits: b.mk ?? 0, skin: b.si ?? 0,
     };
   }
 }

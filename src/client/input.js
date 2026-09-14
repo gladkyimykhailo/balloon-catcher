@@ -69,7 +69,7 @@ export class Input {
       this.keys.add(e.code);
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     });
-    window.addEventListener('keyup', (e) => { if (!typing(e)) this.keys.delete(e.code); });
+    window.addEventListener('keyup', (e) => { this.keys.delete(e.code); });
     window.addEventListener('blur', () => { this.keys.clear(); this.pointers.clear(); });
   }
 

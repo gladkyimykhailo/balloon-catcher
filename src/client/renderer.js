@@ -1,8 +1,11 @@
-import { Application, Container, Graphics, Text } from 'pixi.js';
-import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, HOG, SKUNK, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, ladderAt, bucketSpots } from '../shared/constants.js';
+import { BASKETBALL, basketballTeam, basketballRoster } from '../shared/basketball.js';
+import { Application, Container, FillGradient, Graphics, Text } from 'pixi.js';
+import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, HOG, SKUNK, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, ladderAt, teamLadderAt, bucketSpots } from '../shared/constants.js';
 
 const BAR_W = 360;
 const BAR_H = 24;
+const COURT = { id: 'basketball', sky: [0x15273e, 0x304e69], ground: 0xd99751,
+  groundDark: 0xa76535, cloud: 0xffffff, cloudAlpha: 0, stars: false, flakes: false };
 
 
 export class Renderer {
@@ -12,6 +15,9 @@ export class Renderer {
     this.hands = new Map();   // id -> {view, angle, scale}
     this.particles = [];
     this.shake = 0;
+    this.materials = new Map();
+    this.sceneTime = 0;
+    this.reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
   }
 
   async init(canvasParent) {
@@ -125,12 +131,36 @@ export class Renderer {
   drawBackground(b) {
     const g = this.bgG;
     g.clear();
-    // Небо градієнтом зі смуг — дешево і без текстур.
-    const bands = 48;
-    for (let i = 0; i < bands; i++) {
-      const t = i / (bands - 1);
-      const c = lerpColor(b.sky[0], b.sky[1], t * t);
-      g.rect(0, (FLOOR_Y * i) / bands - 1, WORLD.w, FLOOR_Y / bands + 2).fill(c);
+    if (b.id === 'basketball') { this.drawCourt(g); return; }
+    // Reuse GPU gradient textures across biome changes and animation frames.
+    g.rect(0, 0, WORLD.w, FLOOR_Y).fill(this.gradient(`sky-${b.id}`, [b.sky[0], b.sky[1]]));
+    const night = b.stars;
+    const light = night ? 0xe1eaff : 0xfff4cb;
+    const sunX = WORLD.w * 0.81, sunY = 145;
+    for (let i = 8; i > 0; i--) {
+      g.circle(sunX, sunY, 34 + i * 10).fill({ color: light, alpha: 0.012 });
+    }
+    g.circle(sunX, sunY, night ? 30 : 38).fill({ color: light, alpha: 0.92 });
+    if (night) {
+      for (let i = 0; i < 4; i++) {
+        g.circle(sunX - 12 + i * 7, sunY - 12 + (i % 2) * 22, 4 + i)
+          .fill({ color: b.sky[1], alpha: 0.18 });
+      }
+    }
+    if (b.id === 'meadow') {
+      // A faint rainbow stays behind the action and the landscape.
+      [0xff9aa8, 0xffcc92, 0xffedab, 0xa7e4be, 0x9cceee].forEach((color, i) => {
+        g.arc(280, FLOOR_Y - 32, 240 - i * 12, Math.PI, Math.PI * 2)
+          .stroke({ color, width: 12, alpha: 0.2 });
+      });
+    }
+    if (b.id === 'space') {
+      const x = 235, y = 190;
+      g.ellipse(x, y, 106, 24).stroke({ color: 0xc5b1ff, width: 12, alpha: 0.23 });
+      g.circle(x, y, 55).fill(this.gradient('planet', [0xf8c7ef, 0xa68be0, 0x54418e]));
+      g.moveTo(x - 100, y + 5).bezierCurveTo(x - 45, y + 38, x + 60, y + 38, x + 100, y + 5)
+        .stroke({ color: 0xdfc9ff, width: 9, alpha: 0.72 });
+      g.circle(x - 20, y - 22, 10).fill({ color: 0xffffff, alpha: 0.14 });
     }
     // Зорі малюємо просто в тло: вони нерухомі, тож анімувати нічого.
     // Координати беремо з детермінованої «шумілки», щоб небо не мерехтіло
@@ -143,16 +173,125 @@ export class Renderer {
         g.circle(x, y, r).fill({ color: 0xffffff, alpha: 0.35 + ((i * 17) % 10) / 16 });
       }
     }
-    // Підлога.
-    g.rect(0, FLOOR_Y, WORLD.w, WORLD.h - FLOOR_Y).fill(b.ground);
-    g.rect(0, FLOOR_Y, WORLD.w, 8).fill(b.groundDark);
-    for (let x = 0; x < WORLD.w; x += 26) {
-      const h = 10 + ((x * 7919) % 11);
-      g.moveTo(x, FLOOR_Y).lineTo(x + 5, FLOOR_Y - h).lineTo(x + 10, FLOOR_Y);
-      g.fill(b.groundDark);
+    // Low-contrast scenery leaves the playable silhouettes easy to read.
+    for (let layer = 0; layer < 3; layer++) {
+      const base = FLOOR_Y - 100 + layer * 43;
+      const tint = lerpColor(b.sky[1], b.groundDark, 0.22 + layer * 0.18);
+      g.moveTo(0, FLOOR_Y).lineTo(0, base);
+      for (let x = 0; x < WORLD.w; x += 240) {
+        const peak = base - 55 - Math.sin(x * 0.009 + layer * 2) * 35;
+        if (b.flakes) {
+          g.lineTo(x + 120, peak - 55).lineTo(x + 240, base);
+        } else {
+          g.bezierCurveTo(x + 80, peak, x + 150, peak, x + 240, base);
+        }
+      }
+      g.lineTo(WORLD.w, FLOOR_Y).closePath().fill(tint);
+    }
+    if (b.id === 'meadow' || b.id === 'night' || b.flakes) {
+      for (let i = 0; i < 14; i++) {
+        const x = i * 94 + 19, y = FLOOR_Y - 14;
+        const h = 28 + (i * 17 % 32);
+        const tint = lerpColor(b.groundDark, b.sky[1], 0.35);
+        g.rect(x - 3, y - h, 6, h).fill(tint);
+        g.moveTo(x, y - h - 30).lineTo(x - 22, y - 15).lineTo(x + 22, y - 15)
+          .closePath().fill(tint);
+        if (b.flakes) g.moveTo(x, y - h - 30).lineTo(x - 13, y - h + 1)
+          .lineTo(x + 13, y - h + 1).closePath().fill(0xf2f7fb);
+      }
+    }
+    if (b.id === 'desert') {
+      for (let i = 0; i < 7; i++) {
+        const x = 60 + i * 180, y = FLOOR_Y - 8, h = 38 + i % 3 * 11;
+        const color = lerpColor(b.groundDark, 0x567d69, 0.45);
+        g.roundRect(x - 7, y - h, 14, h, 7).fill(color);
+        g.moveTo(x - 5, y - 17).lineTo(x - 22, y - 17).lineTo(x - 22, y - 38)
+          .stroke({ color, width: 10, cap: 'round', join: 'round' });
+        g.moveTo(x + 5, y - 26).lineTo(x + 20, y - 26).lineTo(x + 20, y - 47)
+          .stroke({ color, width: 9, cap: 'round', join: 'round' });
+        g.moveTo(x - 2, y - h + 8).lineTo(x - 2, y - 5)
+          .stroke({ color: 0xffecc5, alpha: 0.3, width: 2 });
+      }
+    }
+    g.rect(0, FLOOR_Y, WORLD.w, WORLD.h - FLOOR_Y)
+      .fill(this.gradient(`ground-${b.id}`, [b.ground, b.groundDark]));
+    g.rect(0, FLOOR_Y, WORLD.w, 4).fill({ color: 0xffffff, alpha: 0.32 });
+    for (let i = 0; i < 95; i++) {
+      const x = (i * 137) % WORLD.w;
+      const y = FLOOR_Y + 12 + (i * 31) % Math.max(1, WORLD.h - FLOOR_Y - 18);
+      g.ellipse(x, y, 2 + i % 4, 1).fill({ color: b.groundDark, alpha: 0.3 });
+      if (b.id === 'meadow' && i % 5 === 0) {
+        g.moveTo(x, FLOOR_Y + 2).quadraticCurveTo(x - 4, FLOOR_Y - 8, x - 8, FLOOR_Y - 10)
+          .stroke({ color: b.groundDark, width: 2 });
+        g.circle(x - 8, FLOOR_Y - 10, 2.5).fill(i % 2 ? 0xffe6a0 : 0xffc4dc);
+      }
     }
     // Відра стоять на місці й не залежать від біома, тож ідуть у те саме тло.
     for (const p of bucketSpots()) drawBucket(g, p.x, p.y);
+  }
+
+  drawCourt(g) {
+    g.rect(0, 0, WORLD.w, WORLD.h).fill(this.gradient('arena', COURT.sky));
+    // Tiered stands and warm arena lights, kept behind the playing field.
+    for (let row = 0; row < 5; row++) {
+      const y = 160 + row * 42;
+      g.rect(0, y + 25, WORLD.w, 10).fill({ color: 0x0b1a2e, alpha: 0.3 });
+      for (let x = 22; x < WORLD.w; x += 46) {
+        g.roundRect(x, y, 29, 20, 5).fill({ color: x < WORLD.w / 2 ? 0xd89152 : 0x579bc0, alpha: 0.2 });
+      }
+    }
+    for (const x of [150, 420, 780, 1050]) {
+      g.moveTo(x - 20, 112).lineTo(x + 20, 112).lineTo(x + 150, FLOOR_Y).lineTo(x - 150, FLOOR_Y)
+        .closePath().fill({ color: 0xffffff, alpha: 0.025 });
+      g.roundRect(x - 26, 100, 52, 7, 3).fill(0xffefc4);
+    }
+    g.rect(0, FLOOR_Y, WORLD.w, WORLD.h - FLOOR_Y).fill(this.gradient('court-wood', [0xe7b776, 0xb97742]));
+    for (let x = 0; x < WORLD.w; x += 65) {
+      g.moveTo(x, FLOOR_Y).lineTo(x - 25, WORLD.h).stroke({ color: 0x865126, width: 1, alpha: 0.3 });
+    }
+    g.rect(0, FLOOR_Y - 6, WORLD.w / 2, 6).fill(0xffb05b);
+    g.rect(WORLD.w / 2, FLOOR_Y - 6, WORLD.w / 2, 6).fill(0x69c8ff);
+    g.roundRect(30, FLOOR_Y + 12, WORLD.w - 60, 48, 8).stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
+    g.ellipse(WORLD.w / 2, FLOOR_Y + 36, 95, 24).stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
+    const { netX: x, netTop: y, netHalf } = BASKETBALL;
+    g.rect(x - netHalf, y, netHalf * 2, FLOOR_Y - y).fill({ color: 0xffffff, alpha: 0.22 });
+    for (let at = y + 8; at < FLOOR_Y; at += 16) {
+      g.moveTo(x - netHalf, at).lineTo(x + netHalf, at)
+        .stroke({ color: 0xffffff, width: 1.5, alpha: 0.65 });
+    }
+    g.moveTo(x - netHalf, y).lineTo(x - netHalf, FLOOR_Y)
+      .moveTo(x + netHalf, y).lineTo(x + netHalf, FLOOR_Y)
+      .stroke({ color: 0xe3effb, width: 3 });
+    g.roundRect(x - netHalf - 4, y - 4, netHalf * 2 + 8, 8, 4).fill(0xffffff);
+  }
+
+  drawBasketball(pts, match) {
+    const g = this.balloonG;
+    g.clear();
+    const x = pts.reduce((n, p) => n + p.x, 0) / pts.length;
+    const y = pts.reduce((n, p) => n + p.y, 0) / pts.length;
+    const r = BASKETBALL.radius;
+    g.position.set(x, y);
+    g.rotation = match.angle;
+    g.circle(0, 0, r).fill(this.gradient('basket-leather', [0xffd080, 0xf18a26, 0xb84b15]))
+      .stroke({ color: 0x542d1b, width: 3 });
+    g.moveTo(-r, 0).lineTo(r, 0).moveTo(0, -r).lineTo(0, r)
+      .stroke({ color: 0x683416, width: 2 });
+    g.moveTo(-r * 0.7, -r * 0.7).bezierCurveTo(r * 0.25, -r * 0.35, r * 0.25, r * 0.35, -r * 0.7, r * 0.7)
+      .stroke({ color: 0x683416, width: 2 });
+    g.moveTo(r * 0.7, -r * 0.7).bezierCurveTo(-r * 0.25, -r * 0.35, -r * 0.25, r * 0.35, r * 0.7, r * 0.7)
+      .stroke({ color: 0x683416, width: 2 });
+    this.shine.visible = false;
+  }
+
+  gradient(key, colors) {
+    if (!this.materials.has(key)) {
+      this.materials.set(key, new FillGradient({
+        type: 'linear', start: { x: 0, y: 0 }, end: { x: 0.7, y: 1 },
+        colorStops: colors.map((color, i) => ({ offset: i / (colors.length - 1), color })),
+      }));
+    }
+    return this.materials.get(key);
   }
 
   /** Купки в польоті — перемальовуємо щокадру, їх одиниці. */
@@ -169,11 +308,29 @@ export class Renderer {
     }
   }
 
-  /** Сніг: єдиний шар, перемальовується щокадру — 70 кружечків це дешево. */
+  /** Ambient details share one small layer, always behind gameplay objects. */
   updateWeather(dt) {
     const g = this.weather;
-    if (!this.flakes.length) return;
+    this.sceneTime += this.reducedMotion ? 0 : dt;
+    const time = this.sceneTime;
     g.clear();
+    if (this.biome.stars) {
+      for (let i = 0; i < 18; i++) {
+        const x = 24 + (i * 173) % (WORLD.w - 48), y = 110 + (i * 97) % 330;
+        const pulse = 0.25 + 0.35 * (1 + Math.sin(time * 1.5 + i * 2)) / 2;
+        g.star(x, y, 4, 3 + pulse * 3, 1).fill({ color: 0xece6ff, alpha: pulse });
+      }
+    }
+    if (this.biome.id === 'night' || this.biome.id === 'meadow') {
+      const night = this.biome.id === 'night';
+      for (let i = 0; i < 20; i++) {
+        const x = 20 + ((i * 193 + time * (4 + i % 4)) % (WORLD.w - 40));
+        const y = FLOOR_Y - 32 - (i * 47 % 130) + Math.sin(time + i) * 9;
+        const alpha = (night ? 0.5 : 0.28) * (0.65 + Math.sin(time * 2 + i) * 0.35);
+        if (night) g.circle(x, y, 7).fill({ color: 0xd6ffa2, alpha: alpha * 0.1 });
+        g.circle(x, y, night ? 2 : 1.5).fill({ color: night ? 0xe8ffb1 : 0xffffff, alpha });
+      }
+    }
     for (const f of this.flakes) {
       f.y += f.vy * dt;
       f.ph += dt;
@@ -234,6 +391,10 @@ export class Renderer {
     this.msg.anchor.set(0.5);
     this.msg.position.set(WORLD.w / 2, WORLD.h / 2 - 40);
 
+    this.matchText = new Text({ text: '', style: { ...style, fontSize: 22, align: 'center' } });
+    this.matchText.anchor.set(0.5, 0);
+    this.matchText.position.set(WORLD.w / 2, 66);
+    this.hud.addChild(this.matchText);
     this.hud.addChild(this.scoreText, this.levelBar, this.hearts, this.team, this.comboText, this.msg);
   }
 
@@ -286,7 +447,7 @@ export class Renderer {
     // І перчатку, і персонажа можна змінити прямо в грі, тож графіку
     // перемальовуємо, щойно вибір інший — інакше гравець бачив би стару руку
     // до кінця партії. Ключ один на обидва режими.
-    const key = hardcore ? 'c' + char : 'g' + glove;
+    const key = (hardcore ? 'c' + char : 'g' + glove) + ':' + player + ':' + !!isSelf;
     if (h && h.key === key) return h;
     if (h) h.view.destroy({ children: true });
     const color = PLAYER_COLORS[player % PLAYER_COLORS.length];
@@ -314,15 +475,20 @@ export class Renderer {
 
   draw(view, dt) {
     // Біом — чиста функція від рівня, тож клієнту досить рахунку зі снапшота.
-    this.setBiome(biomeAt(view.level?.level ?? 1));
+    this.setBiome(view.basketball ? COURT : biomeAt(view.level?.level ?? 1));
+    this.clouds.visible = !view.basketball;
     this.updateWeather(dt);
     for (const c of this.clouds.children) {
       c.x += c.speed * dt;
       if (c.x > WORLD.w + 140) c.x = -140;
     }
 
-    this.drawBalloon(view.points, view.state, view.deflate > 0, skinAt(view.skin ?? 0));
-    this.drawShadow(view.points);
+    if (view.basketball) this.drawBasketball(view.points, view.basketball);
+    else {
+      this.balloonG.position.set(0, 0); this.balloonG.rotation = 0;
+      this.drawBalloon(view.points, view.state, view.deflate > 0, skinAt(view.skin ?? 0));
+    }
+    this.drawShadow(view.points, view.basketball ? BASKETBALL.radius : BALLOON.radius);
     this.drawGull(view.gull);
     this.drawSpikes(view.spikes, dt);
     this.drawStones(view.stones, dt);
@@ -336,7 +502,7 @@ export class Renderer {
       // Вибулий гравець зникає з поля: його руки в грі більше немає.
       if (hd.out) continue;
       alive.add(hd.id);
-      const h = this.ensureHand(hd.id, hd.player, hd.self, hd.glove ?? 0, hd.char ?? 0, !!view.hardcore);
+      const h = this.ensureHand(hd.id, view.basketball ? basketballTeam(hd.player) : hd.player, hd.self, hd.glove ?? 0, hd.char ?? 0, !!view.hardcore);
       if (h.lx === null) { h.lx = hd.x; h.ly = hd.y; h.view.position.set(hd.x, hd.y); }
       const vx = hd.x - h.lx;
       const vy = hd.y - h.ly;
@@ -358,7 +524,7 @@ export class Renderer {
       // морда догори ногами читається як помилка, а не як замах. Тому йому
       // лишаємо лише легкий нахил у бік руху.
       h.view.rotation = h.hardcore ? h.angle * 0.3 : h.angle;
-      const s = (1 + h.pop * 0.22) * h.base;
+      const s = (1 + h.pop * 0.22) * h.base * (view.team && view.buff?.size > 0 ? BUFFS[1].sizeMul : 1) * (view.basketball ? BASKETBALL.handRadius / 54 : 1);
       h.view.scale.set(s, s * (1 - h.pop * 0.12));
       // Поки долоня обважніла після удару, вона бліда — видно, чому не встигає.
       h.view.alpha = hd.slow > 0 ? 0.6 : 1;
@@ -472,7 +638,7 @@ export class Renderer {
     // У хардкорі загрози однакові на всіх рівнях, тож значки там нічого не
     // повідомляють — їхнє місце займає череп самого режиму. У класиці ж
     // значки — це коротка пам'ятка, що саме вже прокинулось на цьому рівні.
-    const icons = view.hardcore || view.team ? '' : ladderAt(li.level).icons;
+    const icons = view.hardcore ? '' : (view.team ? teamLadderAt(li.level) : ladderAt(li.level)).icons;
     this.levelText.text = (view.hardcore ? '☠ ' : '') + 'Рівень ' + li.level
       + (icons ? ' ' + icons : '');
     this.progText.text = li.progress + ' / ' + li.target;
@@ -492,6 +658,15 @@ export class Renderer {
     } else {
       this.comboText.visible = false;
       if (this._lives !== view.lives) { this._lives = view.lives; this.setHearts(view.lives, view.maxLives); }
+    }
+    this.matchText.visible = !!view.basketball;
+    this.levelBar.visible = !view.basketball;
+    if (view.basketball) {
+      this.hearts.visible = false;
+      this.team.visible = false;
+      this.scoreText.text = view.basketball.score.join(' : ');
+      const counts = basketballRoster(view.hands.map(h => h.player));
+      this.matchText.text = '🟠 ' + counts[0] + '/' + BASKETBALL.teamSize + '   ·   до ' + BASKETBALL.target + ' очок   ·   ' + counts[1] + '/' + BASKETBALL.teamSize + ' 🔵';
     }
     this.msg.text = view.message || '';
     this.msg.visible = !!view.message;
@@ -754,7 +929,10 @@ export class Renderer {
     // Тьмяність рахуємо від кольору скіна, а не беремо готовою: інакше кожен
     // новий скін вимагав би ще однієї константи.
     const fill = deflated ? lerpColor(skin.color, 0x9aa4ab, 0.45) : skin.color;
-    g.fill(state === 'over' ? 0x9aa4ab : fill);
+    const body = state === 'over' ? 0x9aa4ab : fill;
+    g.fill(this.gradient(`balloon-${body}-${skin.dark}`, [
+      lerpColor(body, 0xffffff, 0.62), body, lerpColor(body, skin.dark, 0.72),
+    ]));
     g.stroke({ width: 5, color: state === 'over' ? 0x6d767c : skin.dark, alignment: 0.5 });
 
     // Вузлик і мотузка знизу.
@@ -775,7 +953,7 @@ export class Renderer {
     this.shine.rotation = -0.55;
   }
 
-  drawShadow(pts) {
+  drawShadow(pts, radius = BALLOON.radius) {
     const g = this.shadowG;
     g.clear();
     if (!pts.length) return;
@@ -784,19 +962,35 @@ export class Renderer {
     cx /= pts.length;
     // Що ближче до підлоги, то менша й темніша тінь — дітям легше оцінити висоту.
     const t = Math.max(0, Math.min(1, (maxY + 200) / (FLOOR_Y + 200)));
-    g.ellipse(cx, FLOOR_Y + 14, BALLOON.radius * (0.55 + 0.55 * t), 16 * (0.5 + 0.7 * t))
-      .fill({ color: 0x2f5d1e, alpha: 0.1 + 0.25 * t });
+    for (let i = 5; i > 0; i--) {
+      const spread = 1 + i * 0.15;
+      g.ellipse(cx, FLOOR_Y + 14, radius * (1.25 - 0.55 * t) * spread,
+        (10 + 6 * (1 - t)) * spread)
+        .fill({ color: 0x172638, alpha: (0.025 + 0.035 * t) });
+    }
   }
 
   // ------------------------------------------------------------ ефекти
 
   burst(x, y, color, power = 1) {
+    // Bound simultaneous effects when several players hit at once.
+    if (this.particles.length > 220) return;
+    if (!this.reducedMotion) {
+      const g = new Graphics();
+      g.circle(0, 0, 20).stroke({ color: 0xffffff, width: 2.5, alpha: 0.85 });
+      g.circle(0, 0, 24).stroke({ color, width: 4, alpha: 0.4 });
+      g.position.set(x, y);
+      this.fx.addChild(g);
+      this.particles.push({ g, ring: true, life: 0.35, max: 0.35, power });
+    }
     const count = 6 + Math.round(power * 8);
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = 120 + Math.random() * 320 * (0.5 + power);
       const g = new Graphics();
+      g.circle(0, 0, 15).fill({ color, alpha: 0.1 });
       g.star(0, 0, 4, 9 + Math.random() * 6, 4).fill(color);
+      g.star(0, 0, 4, 4, 1.5).fill({ color: 0xffffff, alpha: 0.85 });
       g.position.set(x, y);
       this.fx.addChild(g);
       this.particles.push({ g, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, life: 0.5 + Math.random() * 0.3, max: 0.8 });
@@ -809,6 +1003,12 @@ export class Renderer {
       const p = this.particles[i];
       p.life -= dt;
       if (p.life <= 0) { p.g.destroy(); this.particles.splice(i, 1); continue; }
+      if (p.ring) {
+        const age = 1 - p.life / p.max;
+        p.g.scale.set(0.6 + age * (1.8 + p.power));
+        p.g.alpha = (1 - age) ** 2;
+        continue;
+      }
       p.vy += 900 * dt;
       p.g.x += p.vx * dt;
       p.g.y += p.vy * dt;
@@ -836,8 +1036,11 @@ function drawBucket(g, x, y) {
 /** Хмара тим кольором, який личить біому: вночі сіро-синя, у пустелі піщана. */
 function paintCloud(g, b) {
   g.clear();
-  g.ellipse(0, 0, 70, 34).ellipse(52, -12, 52, 30).ellipse(-52, -6, 46, 26)
+  g.ellipse(0, 8, 76, 27).ellipse(49, 0, 49, 25).ellipse(-49, 3, 47, 23)
+    .fill({ color: lerpColor(b.cloud, b.sky[0], 0.35), alpha: b.cloudAlpha * 0.65 });
+  g.ellipse(0, -6, 65, 32).ellipse(47, -13, 46, 27).ellipse(-48, -8, 43, 24)
     .fill({ color: b.cloud, alpha: b.cloudAlpha });
+  g.ellipse(-15, -22, 32, 12).fill({ color: 0xffffff, alpha: b.cloudAlpha * 0.22 });
 }
 
 function makeGullGraphic() {

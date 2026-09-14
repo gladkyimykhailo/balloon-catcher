@@ -1,3 +1,5 @@
+import { storage, savedNumber, savedSet } from './storage.js';
+import { BASKETBALL, basketballHand, basketballTeam, basketballRoster, basketballSpawn } from '../shared/basketball.js';
 import { Renderer } from './renderer.js';
 import { Input } from './input.js';
 import { Net, defaultServerUrl, setServerUrl } from './net.js';
@@ -19,12 +21,19 @@ const game = {
 };
 
 let renderer, input;
+let pendingNet = null;
+let connectionVersion = 0;
+function cancelConnection() {
+  connectionVersion++;
+  pendingNet?.close();
+  pendingNet = null;
+}
 let banner = { text: '', t: 0 };   // тимчасовий підпис «Рівень N!»
 let bestCombo = 0;                 // найдовша серія пасів за партію — у підсумок
 // Вибраний скін переживає перезавантаження — дитина не має щоразу шукати «свою» кульку.
-let skin = Math.min(Number(localStorage.getItem('balloon-skin') || 0), SKINS.length - 1);
-let glove = Math.min(Number(localStorage.getItem('balloon-glove') || 0), GLOVES.length - 1);
-let char = Math.min(Number(localStorage.getItem('balloon-char') || 0), CHARACTERS.length - 1);
+let skin = Math.min(savedNumber('balloon-skin'), SKINS.length - 1);
+let glove = Math.min(savedNumber('balloon-glove'), GLOVES.length - 1);
+let char = Math.min(savedNumber('balloon-char'), CHARACTERS.length - 1);
 
 /** Режим світу тримаємо в одному місці: похідні прапорці не мають розходитись. */
 function setKind(k) {
@@ -41,12 +50,18 @@ async function boot() {
   $('#btn-local2').onclick = () => startLocal(2);
   $('#btn-hc').onclick = () => startLocal(1, 'hardcore');
   $('#btn-hc2').onclick = () => startLocal(2, 'hardcore');
+  $('#btn-basket-bot').onclick = () => startLocal(1, 'basketball');
   $('#btn-team2').onclick = () => startLocal(2, 'team');
   // Кімната є в кожного режиму, і влаштована всюди однаково: кнопка «створити»
   // плюс поле коду поруч.
   wireRoom('#btn-host', '#btn-join', '#room-input', 'normal');
   wireRoom('#btn-hc-host', '#btn-hc-join', '#room-hc', 'hardcore');
   wireRoom('#btn-team-host', '#btn-team-join', '#room-team', 'team');
+  wireRoom('#btn-basket-host', '#btn-basket-join', '#room-basket', 'basketball');
+  // Меню екранне: будь-яка кнопка з `data-go` веде на свій екран, а «←» — це
+  // та сама кнопка з `data-go="home"`.
+  for (const b of document.querySelectorAll('[data-go]')) b.onclick = () => showScreen(b.dataset.go);
+  showScreen('home');
   $('#btn-menu').onclick = () => toMenu();
   $('#btn-again').onclick = () => doRestart();
   $('#btn-full').onclick = () => (inFullscreen() ? leaveFullscreen() : enterFullscreen());
@@ -81,13 +96,22 @@ async function boot() {
 
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && game.over) { e.preventDefault(); doRestart(); }
+    // Esc із гри веде в меню, а всередині меню — на крок назад, на головний.
     if (e.code === 'Escape' && game.mode) toMenu();
+    else if (e.code === 'Escape') showScreen('home');
     // KeyH — за розкладкою клавіш, тож працює і на кирилиці («Р»).
     if (e.code === 'KeyH' && game.mode && !game.over) { e.preventDefault(); doMedkit(); }
     if (e.code === 'KeyB' && game.mode && !game.over) { e.preventDefault(); doRage(); }
     if (e.code === 'KeyG' && game.mode && !game.over) { e.preventDefault(); doWear(); }
   });
   window.addEventListener('pointerdown', () => sfx.unlock(), { once: true });
+
+  // Контекстне меню прибрано в усіх режимах: на планшеті довге натискання
+  // посеред гри відкривало системну виноску («Скопіювати», «Поділитись»), і
+  // удар пропадав. Поля коду кімнати — виняток, там воно потрібне для «Вставити».
+  window.addEventListener('contextmenu', (e) => {
+    if (!e.target.closest?.('input')) e.preventDefault();
+  });
 
   // Посилання-запрошення виду ?room=ABCD одразу веде в кімнату,
   // а ?mode=solo / ?mode=local2 — одразу в локальну гру.
@@ -106,14 +130,22 @@ async function boot() {
   // Посилання-запрошення — єдиний випадок, коли адресу треба знати ВЖЕ: воно
   // з'єднується саме, не даючи кнопкам шансу з'явитись.
   if (invite) await finding;
-  if (invite) { $('#room-input').value = invite.toUpperCase(); startOnline(invite.toUpperCase(), kindOf(mode)); }
+  if (invite) {
+    const kind = kindOf(mode);
+    // Екран режиму відкриваємо навіть при вдалому вході: якщо зв'язок обірветься
+    // або кімната виявиться повною, гравець опиниться саме там, де його код.
+    showScreen(screenOf(kind));
+    $(codeField(kind)).value = invite.toUpperCase();
+    startOnline(invite.toUpperCase(), kind);
+  }
   else if (mode === 'solo') startLocal(1);
   else if (mode === 'local2') startLocal(2);
   else if (mode === 'hardcore') startLocal(1, 'hardcore');
   else if (mode === 'hardcore2') startLocal(2, 'hardcore');
   else if (mode === 'team') startLocal(2, 'team');
+  else if (mode === 'basketball') startLocal(1, 'basketball');
   // ?host=hardcore — одразу створити кімнату потрібного режиму, не заходячи в меню.
-  else if (q.get('host')) { await finding; startOnline('', kindOf(q.get('host'))); }
+  else if (q.get('host')) { await finding; showScreen(screenOf(kindOf(q.get('host')))); startOnline('', kindOf(q.get('host'))); }
 
   renderer.app.ticker.add((t) => frame(Math.min(t.deltaMS / 1000, 1 / 20)));
 }
@@ -127,15 +159,15 @@ async function boot() {
 // не за влучання, а лише за пройдений хардкор-рівень. Тому їх не «накопичиш
 // між ділом» у дитячій грі: щоб купити персонажа, треба саме хардкор грати.
 const wallet = {
-  coins: Number(localStorage.getItem('balloon-coins') || 0),
-  skulls: Number(localStorage.getItem('balloon-skulls') || 0),
-  tokens: Number(localStorage.getItem('balloon-tokens') || 0),
+  coins: savedNumber('balloon-coins'),
+  skulls: savedNumber('balloon-skulls'),
+  tokens: savedNumber('balloon-tokens'),
   owned: {
-    skin: new Set(JSON.parse(localStorage.getItem('balloon-owned-skins') || '["red"]')),
-    glove: new Set(JSON.parse(localStorage.getItem('balloon-owned-gloves') || '["hand"]')),
-    char: new Set(JSON.parse(localStorage.getItem('balloon-owned-chars') || '["racoon"]')),
+    skin: savedSet('balloon-owned-skins', ["red"]),
+    glove: savedSet('balloon-owned-gloves', ["hand"]),
+    char: savedSet('balloon-owned-chars', ["racoon"]),
     // Перки, на відміну від скінів, не «вдягаються»: куплений діє завжди.
-    perk: new Set(JSON.parse(localStorage.getItem('balloon-owned-perks') || '[]')),
+    perk: savedSet('balloon-owned-perks', []),
   },
   earned: 0,        // монет за поточну партію — показуємо в кінці
   earnedSkulls: 0,  // і черепів за неї ж
@@ -143,13 +175,13 @@ const wallet = {
 };
 
 function saveWallet() {
-  localStorage.setItem('balloon-coins', String(wallet.coins));
-  localStorage.setItem('balloon-skulls', String(wallet.skulls));
-  localStorage.setItem('balloon-owned-skins', JSON.stringify([...wallet.owned.skin]));
-  localStorage.setItem('balloon-owned-gloves', JSON.stringify([...wallet.owned.glove]));
-  localStorage.setItem('balloon-owned-chars', JSON.stringify([...wallet.owned.char]));
-  localStorage.setItem('balloon-tokens', String(wallet.tokens));
-  localStorage.setItem('balloon-owned-perks', JSON.stringify([...wallet.owned.perk]));
+  storage.setItem('balloon-coins', String(wallet.coins));
+  storage.setItem('balloon-skulls', String(wallet.skulls));
+  storage.setItem('balloon-owned-skins', JSON.stringify([...wallet.owned.skin]));
+  storage.setItem('balloon-owned-gloves', JSON.stringify([...wallet.owned.glove]));
+  storage.setItem('balloon-owned-chars', JSON.stringify([...wallet.owned.char]));
+  storage.setItem('balloon-tokens', String(wallet.tokens));
+  storage.setItem('balloon-owned-perks', JSON.stringify([...wallet.owned.perk]));
 }
 
 function addCoins(n) {
@@ -173,13 +205,14 @@ function addTokens(n) {
   showCoins();
 }
 
+/**
+ * Гаманець світиться в кількох місцях одразу (головний екран, магазин, острів
+ * режиму, HUD), тож оновлюємо не за id, а за `data-w` — додати ще одне місце
+ * тепер можна самою розміткою.
+ */
 function showCoins() {
-  $('#coins').textContent = '🪙 ' + wallet.coins;
-  $('#coins-hud').textContent = '🪙 ' + wallet.coins;
-  $('#skulls').textContent = '☠ ' + wallet.skulls;
-  $('#skulls-hud').textContent = '☠ ' + wallet.skulls;
-  $('#tokens').textContent = '🤝 ' + wallet.tokens;
-  $('#tokens-hud').textContent = '🤝 ' + wallet.tokens;
+  const money = { coins: '🪙 ' + wallet.coins, skulls: '☠ ' + wallet.skulls, tokens: '🤝 ' + wallet.tokens };
+  for (const el of document.querySelectorAll('[data-w]')) el.textContent = money[el.dataset.w];
 }
 
 /** Опис одного ряду магазину: список, де зберігається вибір, що робити після. */
@@ -279,7 +312,7 @@ function pickItem(kind, i) {
     buildPicker(kind);   // ціна зникає, кружечок оживає
     flashPicker(kind, 'Куплено: ' + it.emoji + ' ' + it.name + '!', false);
   }
-  if (p.store) localStorage.setItem(p.store, String(i));
+  if (p.store) storage.setItem(p.store, String(i));
   p.apply(i);
   refreshPicker(kind);
 }
@@ -368,6 +401,9 @@ function syncFullBtn() {
 }
 
 function startLocal(players, kind = 'normal') {
+  cancelConnection();
+  game.net?.close();
+  game.net = null;
   if (isTouch()) enterFullscreen();
   setKind(kind);
   game.mode = players === 1 ? 'solo' : 'local2';
@@ -378,24 +414,41 @@ function startLocal(players, kind = 'normal') {
   // за одним комп'ютером теж спільні — гаманець же один.
   const mask = perkMask(wallet.owned.perk);
   for (let i = 0; i < players; i++) addHand(game.world, 'h' + i, i, glove, char, mask);
+  if (kind === 'basketball' && players === 1) addHand(game.world, 'bot', 1).bot = true;
   input.reset(players);
   const how = players === 1 ? 'Веди мишкою або WASD' : 'Гравець 1 — WASD, Гравець 2 — стрілки. На сенсорі — два пальці';
-  const tip = kind === 'hardcore' ? '☠ Хардкор: камінці з неба, шипи щорівня, два серця. '
+  const tip = kind === 'basketball' ? '🏀 Перекинь м’яч через сітку на підлогу суперника. До ' + BASKETBALL.target + ' очок. '
+    : kind === 'hardcore' ? '☠ Хардкор: камінці з неба, шипи щорівня, два серця. '
     : kind === 'team' ? '🤝 Тім-ап: тапнув — пасуй! Двічі поспіль не можна. '
     : '';
   showHud(tip + how);
   sfx.start();
 }
 
-/** Посилання-запрошення: код кімнати плюс її режим. */
+/** Запрошення веде на той самий сервер, навіть зі статичної сторінки. */
 function inviteLink() {
-  const url = location.origin + location.pathname + '?room=' + game.net.room;
-  return game.kind === 'normal' ? url : url + '&mode=' + game.kind;
+  const url = new URL(location.pathname, location.origin);
+  url.searchParams.set('room', game.net.room);
+  if (game.kind !== 'normal') url.searchParams.set('mode', game.kind);
+  // Беремо адресу активного з'єднання: ws.json міг змінитися після входу,
+  // а друг має потрапити саме до кімнати, у якій ми вже граємо.
+  url.searchParams.set('ws', game.net.ws.url);
+  return url.href;
+}
+
+/** Екран меню, на якому живе цей режим. */
+function screenOf(kind) {
+  return kind === 'normal' ? 'classic' : kind;
+}
+
+/** Поле коду того екрана меню, що відповідає режиму. */
+function codeField(kind) {
+  return { hardcore: '#room-hc', team: '#room-team', basketball: '#room-basket' }[kind] || '#room-input';
 }
 
 /** Режим світу з рядка: усе незнайоме — звичайна гра. */
 function kindOf(s) {
-  return ['hardcore', 'team'].includes(s) ? s : 'normal';
+  return ['hardcore', 'team', 'basketball'].includes(s) ? s : 'normal';
 }
 
 /**
@@ -407,7 +460,7 @@ function wireRoom(hostSel, joinSel, inputSel, kind) {
   const input = $(inputSel);
   const join = () => {
     const code = input.value.trim().toUpperCase();
-    if (code.length < 3) { setNote('Введи код кімнати з 4 символів', true); return; }
+    if (!/^[A-Z0-9]{4}$/.test(code)) { setNote('Введи код кімнати з 4 символів', true); return; }
     startOnline(code, kind);
   };
   $(hostSel).onclick = () => startOnline('', kind);
@@ -415,24 +468,61 @@ function wireRoom(hostSel, joinSel, inputSel, kind) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 }
 
-async function startOnline(room, kind = 'normal') {
-  if (isTouch()) enterFullscreen();
-  setNote("З'єднуємось…", false);
+/**
+ * `quiet` — це вхід у кімнату після обриву: гравець уже в грі, тож ні
+ * повноекранного режиму, ні вітального підпису вдруге показувати не треба.
+ * Повертає, чи вийшло зайти — на цьому тримається `reconnect`.
+ */
+async function startOnline(room, kind = 'normal', { quiet = false, refreshed = false } = {}) {
+  if (isTouch() && !quiet) enterFullscreen();
+  if (!quiet) setNote("З'єднуємось…", false);
+  cancelConnection();
+  const version = connectionVersion;
   const net = new Net();
-  net.onError = (m) => setNote(m, true);
-  net.onEvent = onWorldEvent;
+  pendingNet = net;
+  net.onError = m => { if (version === connectionVersion) setNote(m, true); };
+  net.onEvent = e => { if (game.net === net) onWorldEvent(e); };
   net.onStatus = (m) => {
-    if (m.t === 'closed') { setNote("З'єднання втрачено", true); toMenu(); return; }
-    $('#peer-info').textContent = peerLabel(m.n, net.maxPlayers);
+    if (m.t === 'closed') {
+      // `clean` — ми самі пішли (меню, інша кімната). А якщо ми вже встигли
+      // перепід'єднатись, прощання старого сокета нічого не означає.
+      if (m.clean || game.net !== net) return;
+      reconnect(net.room, game.kind);
+      return;
+    }
+    $('#peer-info').textContent = peerLabel(m.n, net.maxPlayers, net.mode, net.sides);
   };
+  const serverUrl = defaultServerUrl();
   try {
-    await net.connect(defaultServerUrl(), room, kind);
+    await net.connect(serverUrl, room, kind);
   } catch (e) {
-    setNote(e.message + '. Запусти сервер: npm start', true);
-    return;
+    if (version !== connectionVersion) return false;
+    pendingNet = null;
+    net.closing = true;
+    net.ws?.close();
+    // Старий тунель у запрошенні може вже не існувати. Лише для тимчасових
+    // тунелів перевіряємо нову опубліковану адресу й повторюємо один раз.
+    if (!e.fromServer && !refreshed && isTunnelUrl(serverUrl)) {
+      const fresh = await findSharedServer();
+      if (version !== connectionVersion) return false;
+      if (fresh && new URL(fresh).href !== new URL(serverUrl).href) {
+        const url = new URL(location.href);
+        url.searchParams.set('ws', fresh);
+        history.replaceState(null, '', url);
+        return startOnline(room, kind, { quiet, refreshed: true });
+      }
+    }
+    // Сервер відповів і відмовив (кімната повна) — тоді його слова й показуємо:
+    // радити «запусти сервер» тому, хто щойно з ним говорив, безглуздо.
+    setNote(e.fromServer ? e.message
+      : 'Сервер кімнат недоступний. Тимчасове посилання могло застаріти — попроси нове посилання у того, хто запустив гру.', true);
+    return false;
   }
   // Режим кімнати вирішує той, хто її створив: світ у ній один. Тому дивимось
   // не на те, що ми просили, а на те, що відповів сервер.
+  if (version !== connectionVersion) { net.close(); return false; }
+  pendingNet = null;
+  game.net?.close();
   setKind(net.mode);
   net.setSkin(skin);    // кулька в кімнаті одна, тож діє вибір того, хто обрав останнім
   if (game.hardcore) net.setChar(char);  // персонаж особистий — сервер змінить лише твою руку
@@ -443,23 +533,63 @@ async function startOnline(room, kind = 'normal') {
   game.world = null;
   game.over = false;
   input.reset(1);
-  game.ghost = { x: WORLD.w / 2, y: WORLD.h - 180 };
+  game.ghost = game.kind === 'basketball' ? basketballSpawn(net.side) : { x: WORLD.w / 2, y: WORLD.h - 180 };
+  if (game.kind === 'basketball') { input.targets[0].x = game.ghost.x; input.targets[0].y = game.ghost.y; }
   $('#room-code').textContent = net.room;
   $('#room-badge').hidden = false;
-  $('#peer-info').textContent = peerLabel(net.peers, net.maxPlayers);
-  const who = game.hardcore
+  $('#peer-info').textContent = peerLabel(net.peers, net.maxPlayers, net.mode, net.sides);
+  const who = game.kind === 'basketball' ? '🏀 Твоя команда — ' + (basketballTeam(net.side) === 0 ? 'помаранчева, ліворуч' : 'синя, праворуч') + '. Матч до ' + BASKETBALL.target + ' очок'
+    : game.hardcore
     ? '☠ Хардкор! Ти — ' + CHARACTERS[char].emoji + ' ' + CHARACTERS[char].name + ' у ' + PLAYER_COLOR_NAMES[net.side] + 'му нашийнику'
     : game.team
       ? '🤝 Тім-ап! Ти — ' + PLAYER_COLOR_NAMES[net.side] + ' долоня. Тапнув — пасуй, двічі поспіль не можна'
       : 'Ти — ' + PLAYER_COLOR_NAMES[net.side] + ' долоня';
+  if (quiet) {
+    // Після обриву HUD уже на екрані, і перезапускати його не можна: showHud
+    // обнуляє зароблене за партію.
+    setNote('Знову в кімнаті ' + net.room + ' ✓', false);
+    setTimeout(() => { if (game.net === net) setNote('', false); }, 2500);
+    return true;
+  }
   showHud(who + '. Дай друзям код ' + net.room);
   // Просив один режим, а кімната виявилась іншою — про це треба сказати прямо,
   // інакше гравець довго не розумів би, чому нема камінців (чи пасів).
   if (kind !== net.mode) {
-    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝' }[net.mode]
+    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝', basketball: 'Ця кімната — basketball 🏀' }[net.mode]
       || 'Ця кімната звичайна', false);
   }
   sfx.start();
+  return true;
+}
+
+function isTunnelUrl(value) {
+  try { return new URL(value).hostname.endsWith('.trycloudflare.com'); } catch { return false; }
+}
+
+const RECONNECT_TRIES = 10;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Обрив зв'язку. Кімната на сервері живе, поки в ній лишився хоч хтось, тож
+ * найчастіше повернутись можна просто в ту саму гру — пробуємо кілька разів і
+ * лише потім відпускаємо гравця в меню. Мертвий `game.net` навмисно лишаємо на
+ * місці: він тримає останній снапшот, і сцена завмирає замість того, щоб
+ * блимнути порожнім небом.
+ */
+async function reconnect(room, kind) {
+  const previous = game.net;
+  for (let i = 1; i <= RECONNECT_TRIES; i++) {
+    setNote(`Зв'язок обірвався. Повертаємось у кімнату ${room}… (${i}/${RECONNECT_TRIES})`, true);
+    // Пауза росте: після обриву мережі сервер ще якийсь час тримає наше старе
+    // місце (поки не відповімо на ping), і кімната виглядає повною. Разом
+    // спроби вкладаються приблизно в 40 секунд — довше за той привид.
+    await sleep(Math.min(1200 * i, 5000));
+    if (game.mode !== 'online' || game.net !== previous) return;        // гравець сам вийшов у меню
+    if (await startOnline(room, kind, { quiet: true })) return;
+    if (game.mode !== 'online' || game.net !== previous) return;
+  }
+  setNote('Кімната ' + room + ' не відповідає', true);
+  toMenu();
 }
 
 /**
@@ -476,26 +606,48 @@ const SHARE_TTL = 12 * 3600 * 1000;
 
 async function findSharedServer() {
   try {
-    const r = await fetch('./ws.json', { cache: 'no-store' });
+    const r = await fetch('./ws.json', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     if (!r.ok) return;
     const d = await r.json();
     if (!d.url || Date.now() - (d.ts ?? 0) > SHARE_TTL) return;
-    setServerUrl(d.url);
+    const url = new URL(d.url);
+    if (!['ws:', 'wss:'].includes(url.protocol)) return;
+    if (location.protocol === 'https:' && url.protocol !== 'wss:') return;
+    setServerUrl(url.href);
     document.body.classList.remove('no-online');
+    return url.href;
   } catch {
     /* немає файлу чи немає мережі — просто граємо без кімнат */
   }
 }
 
 /** «Чекаємо…» / «Граєте втрьох» / «Кімната повна» — одним рядком. */
-function peerLabel(n, max) {
+function peerLabel(n, max, mode, sides = []) {
+  if (mode === 'basketball') {
+    const counts = basketballRoster(sides);
+    return '🟠 ' + counts[0] + '/' + BASKETBALL.teamSize + ' · 🔵 ' + counts[1] + '/' + BASKETBALL.teamSize
+      + (counts.some(count => count === 0) ? ' · Чекаємо на суперників…' : ' · ' + n + '/' + max + ' гравців');
+  }
   if (n < 2) return 'Чекаємо на друзів…';
   const words = { 2: 'вдвох', 3: 'втрьох', 4: 'вчотирьох' };
   const who = words[n] ?? n + ' гравці';
   return `Граєте ${who} 🎉` + (n < max ? ` · є місце ще для ${max - n}` : '');
 }
 
+/**
+ * Один екран меню за раз. Картка щоразу прокручується на початок: інакше,
+ * зайшовши в довгий екран і вийшовши, гравець бачив би головний десь із
+ * середини.
+ */
+function showScreen(name) {
+  for (const s of document.querySelectorAll('#menu .screen')) s.hidden = s.dataset.screen !== name;
+  $('#menu .card').scrollTop = 0;
+  setNote('', false);
+}
+
 function toMenu() {
+  cancelConnection();
+  showScreen('home');
   game.net?.close();
   game.net = null;
   game.world = null;
@@ -607,6 +759,8 @@ function showHud(tip) {
   // дитячій грі не світились два незрозумілі рахунки.
   $('#skulls-hud').hidden = !game.hardcore;
   $('#tokens-hud').hidden = !game.team;
+  $('#med').hidden = game.kind === 'basketball';
+  $('#coins-hud').hidden = game.kind === 'basketball';
   $('#menu').hidden = true;
   $('#gameover').hidden = true;
   $('#hud').hidden = false;
@@ -658,16 +812,18 @@ function frame(dt) {
 function frameLocal(dt) {
   const w = game.world;
   for (let i = 0; i < w.hands.length; i++) {
+    if (w.hands[i].bot) continue;
     const t = input.target(i);
-    setHandTarget(w, 'h' + i, t.x, t.y);
+    setHandTarget(w, w.hands[i].id, t.x, t.y);
   }
   step(w, dt);
   for (const e of w.events) onWorldEvent(e);
 
-  if (w.state === 'over' && !game.over) endGame(w.score);
+  if (w.state === 'over' && !game.over) endGame(w.score, w.basketball);
 
   return {
     points: w.balloon.pts,
+    basketball: w.basketball,
     hands: w.hands.map((h) => ({
       id: h.id, player: h.player, x: h.x, y: h.y, flash: h.flash, slow: h.slow,
       glove: h.glove, char: h.char, rage: h.rage, rages: h.rages, dirty: h.dirty, self: false,
@@ -698,7 +854,8 @@ function frameLocal(dt) {
     combo: w.combo,
     buff: w.buff,
     level: levelInfo(w.score, w.mode),
-    message: banner.t > 0 ? banner.text : (w.state === 'respawn' ? 'Кулька впала!' : ''),
+    // Події гри передаємо звуком та ефектами, без спливного тексту.
+    message: '',
   };
 }
 
@@ -718,7 +875,12 @@ function frameOnline(dt) {
   // Кит потрібен і тут: пацюк ходить за курсором помітно швидше, і без цього
   // локальна рука розходилась би з серверною рівно на цю різницю.
   const kit = handKit(snap.mode, mine?.glove ?? 0, mine?.char ?? 0);
-  const g = advanceHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, (mine?.slow ?? 0) > 0, kit);
+  if (snap.team && snap.buff.speed > 0) kit.speedMul *= BUFFS[0].speedMul;
+  const g = (snap.team && (mine?.web > 0 || mine?.out)) || (snap.basketball && snap.state === 'waiting')
+    ? { x: mine?.x ?? game.ghost.x, y: mine?.y ?? game.ghost.y }
+    : game.kind === 'basketball'
+    ? basketballHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, game.net.side)
+    : advanceHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, (mine?.slow ?? 0) > 0, kit);
   game.ghost.x = g.x;
   game.ghost.y = g.y;
   const hands = snap.hands.map((h) =>
@@ -726,11 +888,12 @@ function frameOnline(dt) {
       ? { ...h, x: game.ghost.x, y: game.ghost.y, player: game.net.side, self: true }
       : { ...h, self: false });
 
-  if (snap.state === 'over' && !game.over) endGame(snap.score);
+  if (snap.state === 'over' && !game.over) endGame(snap.score, snap.basketball);
   if (snap.state !== 'over' && game.over) { game.over = false; $('#gameover').hidden = true; }
 
   return {
     points: snap.points,
+    basketball: snap.basketball,
     hands,
     score: snap.score,
     lives: snap.lives,
@@ -752,9 +915,7 @@ function frameOnline(dt) {
     combo: snap.combo,
     buff: snap.buff,
     level: levelInfo(snap.score, snap.mode),
-    message: banner.t > 0 ? banner.text
-      : snap.state === 'waiting' ? 'Чекаємо на друзів…'
-      : snap.state === 'respawn' ? 'Кулька впала!' : '',
+    message: snap.state === 'waiting' ? (snap.basketball ? 'Чекаємо на команду суперників…' : 'Чекаємо на друзів…') : '',
   };
 }
 
@@ -798,7 +959,13 @@ function idleView(dt) {
 }
 
 function onWorldEvent(e) {
-  if (e.type === 'hit') {
+  if (e.type === 'basketHit') {
+    renderer.burst(e.x, e.y, PLAYER_COLORS[basketballTeam(e.player)], 0.5);
+    sfx.hit(0.6);
+  } else if (e.type === 'basketPoint') {
+    renderer.burst(e.x, e.y - 30, PLAYER_COLORS[e.player], 1);
+    sfx.level();
+  } else if (e.type === 'hit') {
     renderer.burst(e.x, e.y, PLAYER_COLORS[e.player % PLAYER_COLORS.length], e.power ?? 0.5);
     sfx.hit(e.power ?? 0.5);
     // Монета за кожне влучання. В онлайні — тільки за свої: події прилітають
@@ -961,6 +1128,9 @@ function onWorldEvent(e) {
       renderer.burst(WORLD.w * (0.25 + i * 0.25), 200 + i * 40, [0xffd23f, 0x4dc9f6, 0xff9f1c][i], 1);
     }
     sfx.level();
+  } else if (e.type === 'corner') {
+    renderer.burst(e.x, e.y, 0xff4d6d, 0.5);
+    sfx.drop();
   } else if (e.type === 'drop') {
     renderer.burst(e.x, e.y, 0xffffff, 1);
     renderer.shake = 1;
@@ -968,8 +1138,23 @@ function onWorldEvent(e) {
   }
 }
 
-function endGame(score) {
+function endGame(score, basketball = null) {
   game.over = true;
+  $('#gameover-title').textContent = basketball ? '🏀 Матч завершено!' : 'Кулька впала 😢';
+  $('#classic-result').hidden = !!basketball;
+  $('#basket-result').hidden = !basketball;
+  if (basketball) {
+    const mine = game.mode === 'online' ? basketballTeam(game.net.side) : 0;
+    const winner = game.mode === 'local2'
+      ? 'Переміг гравець ' + (basketball.winner + 1)
+      : basketball.winner === mine ? (game.mode === 'online' ? 'Твоя команда перемогла! 🏆' : 'Ти переміг! 🏆') : game.mode === 'solo' ? 'Переміг бот. Спробуй ще!' : 'Перемогла команда суперників. Спробуй ще!';
+    $('#basket-result').textContent = winner + ' · ' + basketball.score.join(' : ');
+    $('#hc-earned').hidden = true;
+    $('#team-earned').hidden = true;
+    $('#gameover').hidden = false;
+    sfx.over();
+    return;
+  }
   $('#earned-tokens').textContent = wallet.earnedTokens;
   $('#best-combo').textContent = bestCombo;
   $('#team-earned').hidden = !game.team;
@@ -983,8 +1168,8 @@ function endGame(score) {
   // Рекорд у хардкорі окремий: рівні там удвічі коротші, тож спільний рекорд
   // порівнював би непорівнянне.
   const key = game.hardcore ? 'balloon-best-hardcore' : game.team ? 'balloon-best-team' : 'balloon-best';
-  const best = Math.max(score, Number(localStorage.getItem(key) || 0));
-  localStorage.setItem(key, String(best));
+  const best = Math.max(score, savedNumber(key));
+  storage.setItem(key, String(best));
   $('#best-score').textContent = best;
 }
 
