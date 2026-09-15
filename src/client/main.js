@@ -50,6 +50,10 @@ async function boot() {
   $('#btn-local2').onclick = () => startLocal(2);
   $('#btn-hc').onclick = () => startLocal(1, 'hardcore');
   $('#btn-hc2').onclick = () => startLocal(2, 'hardcore');
+  $('#btn-watch').onclick = () => watchRoom();
+  $('#room-watch').addEventListener('keydown', e => { if (e.key === 'Enter') watchRoom(); });
+  $('#btn-hoops-bot').onclick = () => startLocal(1, 'hoops');
+  wireRoom('#btn-hoops-host', '#btn-hoops-join', '#room-hoops', 'hoops');
   $('#btn-basket-bot').onclick = () => startLocal(1, 'basketball');
   $('#btn-team2').onclick = () => startLocal(2, 'team');
   // Кімната є в кожного режиму, і влаштована всюди однаково: кнопка «створити»
@@ -136,14 +140,14 @@ async function boot() {
     // або кімната виявиться повною, гравець опиниться саме там, де його код.
     showScreen(screenOf(kind));
     $(codeField(kind)).value = invite.toUpperCase();
-    startOnline(invite.toUpperCase(), kind);
+    startOnline(invite.toUpperCase(), kind, { spectator: q.get('watch') === '1' });
   }
   else if (mode === 'solo') startLocal(1);
   else if (mode === 'local2') startLocal(2);
   else if (mode === 'hardcore') startLocal(1, 'hardcore');
   else if (mode === 'hardcore2') startLocal(2, 'hardcore');
   else if (mode === 'team') startLocal(2, 'team');
-  else if (mode === 'basketball') startLocal(1, 'basketball');
+  else if (['basketball', 'hoops'].includes(mode)) startLocal(1, mode);
   // ?host=hardcore — одразу створити кімнату потрібного режиму, не заходячи в меню.
   else if (q.get('host')) { await finding; showScreen(screenOf(kindOf(q.get('host')))); startOnline('', kindOf(q.get('host'))); }
 
@@ -401,6 +405,7 @@ function syncFullBtn() {
 }
 
 function startLocal(players, kind = 'normal') {
+  renderer.setSpectating(false);
   cancelConnection();
   game.net?.close();
   game.net = null;
@@ -414,10 +419,15 @@ function startLocal(players, kind = 'normal') {
   // за одним комп'ютером теж спільні — гаманець же один.
   const mask = perkMask(wallet.owned.perk);
   for (let i = 0; i < players; i++) addHand(game.world, 'h' + i, i, glove, char, mask);
-  if (kind === 'basketball' && players === 1) addHand(game.world, 'bot', 1).bot = true;
+  if (['basketball', 'hoops'].includes(kind) && players === 1) {
+    const bot = addHand(game.world, 'bot', 1);
+    bot.bot = true;
+    bot.botDifficulty = $(kind === 'hoops' ? '#hoops-difficulty' : '#bot-difficulty').value;
+  }
   input.reset(players);
   const how = players === 1 ? 'Веди мишкою або WASD' : 'Гравець 1 — WASD, Гравець 2 — стрілки. На сенсорі — два пальці';
-  const tip = kind === 'basketball' ? '🏀 Перекинь м’яч через сітку на підлогу суперника. До ' + BASKETBALL.target + ' очок. '
+  const tip = kind === 'hoops' ? '🏀 Закинь м’яч у кошик суперника! +2 очки за кошик, матч до 10. '
+    : kind === 'basketball' ? '🏐 Перекинь м’яч через сітку на підлогу суперника. До ' + BASKETBALL.target + ' очок. '
     : kind === 'hardcore' ? '☠ Хардкор: камінці з неба, шипи щорівня, два серця. '
     : kind === 'team' ? '🤝 Тім-ап: тапнув — пасуй! Двічі поспіль не можна. '
     : '';
@@ -429,6 +439,7 @@ function startLocal(players, kind = 'normal') {
 function inviteLink() {
   const url = new URL(location.pathname, location.origin);
   url.searchParams.set('room', game.net.room);
+  if (game.net.spectator) url.searchParams.set('watch', '1');
   if (game.kind !== 'normal') url.searchParams.set('mode', game.kind);
   // Беремо адресу активного з'єднання: ws.json міг змінитися після входу,
   // а друг має потрапити саме до кімнати, у якій ми вже граємо.
@@ -443,12 +454,12 @@ function screenOf(kind) {
 
 /** Поле коду того екрана меню, що відповідає режиму. */
 function codeField(kind) {
-  return { hardcore: '#room-hc', team: '#room-team', basketball: '#room-basket' }[kind] || '#room-input';
+  return { hardcore: '#room-hc', team: '#room-team', basketball: '#room-basket', hoops: '#room-hoops' }[kind] || '#room-input';
 }
 
 /** Режим світу з рядка: усе незнайоме — звичайна гра. */
 function kindOf(s) {
-  return ['hardcore', 'team', 'basketball'].includes(s) ? s : 'normal';
+  return ['hardcore', 'team', 'basketball', 'hoops'].includes(s) ? s : 'normal';
 }
 
 /**
@@ -456,6 +467,12 @@ function kindOf(s) {
  * для НОВОЇ кімнати: якщо за кодом уже грають, діє її режим (див. startOnline),
  * бо світ у кімнаті один на всіх.
  */
+function watchRoom() {
+  const code = $('#room-watch').value.trim().toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(code)) { setNote('Введи код кімнати з 4 символів', true); return; }
+  startOnline(code, 'normal', { spectator: true });
+}
+
 function wireRoom(hostSel, joinSel, inputSel, kind) {
   const input = $(inputSel);
   const join = () => {
@@ -463,7 +480,7 @@ function wireRoom(hostSel, joinSel, inputSel, kind) {
     if (!/^[A-Z0-9]{4}$/.test(code)) { setNote('Введи код кімнати з 4 символів', true); return; }
     startOnline(code, kind);
   };
-  $(hostSel).onclick = () => startOnline('', kind);
+  $(hostSel).onclick = () => startOnline('', kind, { bots: kind === 'hoops' && $('#hoops-room-bots').checked });
   $(joinSel).onclick = join;
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 }
@@ -473,7 +490,7 @@ function wireRoom(hostSel, joinSel, inputSel, kind) {
  * повноекранного режиму, ні вітального підпису вдруге показувати не треба.
  * Повертає, чи вийшло зайти — на цьому тримається `reconnect`.
  */
-async function startOnline(room, kind = 'normal', { quiet = false, refreshed = false } = {}) {
+async function startOnline(room, kind = 'normal', { quiet = false, refreshed = false, spectator = false, bots = false } = {}) {
   if (isTouch() && !quiet) enterFullscreen();
   if (!quiet) setNote("З'єднуємось…", false);
   cancelConnection();
@@ -494,7 +511,7 @@ async function startOnline(room, kind = 'normal', { quiet = false, refreshed = f
   };
   const serverUrl = defaultServerUrl();
   try {
-    await net.connect(serverUrl, room, kind);
+    await net.connect(serverUrl, room, kind, { spectator, bots });
   } catch (e) {
     if (version !== connectionVersion) return false;
     pendingNet = null;
@@ -509,7 +526,7 @@ async function startOnline(room, kind = 'normal', { quiet = false, refreshed = f
         const url = new URL(location.href);
         url.searchParams.set('ws', fresh);
         history.replaceState(null, '', url);
-        return startOnline(room, kind, { quiet, refreshed: true });
+        return startOnline(room, kind, { quiet, refreshed: true, spectator, bots });
       }
     }
     // Сервер відповів і відмовив (кімната повна) — тоді його слова й показуємо:
@@ -530,15 +547,17 @@ async function startOnline(room, kind = 'normal', { quiet = false, refreshed = f
   if (game.team) net.setPerks(perkMask(wallet.owned.perk));
   game.mode = 'online';
   game.net = net;
+  renderer.setSpectating(net.spectator);
   game.world = null;
   game.over = false;
   input.reset(1);
-  game.ghost = game.kind === 'basketball' ? basketballSpawn(net.side) : { x: WORLD.w / 2, y: WORLD.h - 180 };
-  if (game.kind === 'basketball') { input.targets[0].x = game.ghost.x; input.targets[0].y = game.ghost.y; }
+  game.ghost = ['basketball', 'hoops'].includes(game.kind) ? basketballSpawn(net.side) : { x: WORLD.w / 2, y: WORLD.h - 180 };
+  if (['basketball', 'hoops'].includes(game.kind)) { input.targets[0].x = game.ghost.x; input.targets[0].y = game.ghost.y; }
   $('#room-code').textContent = net.room;
   $('#room-badge').hidden = false;
   $('#peer-info').textContent = peerLabel(net.peers, net.maxPlayers, net.mode, net.sides);
-  const who = game.kind === 'basketball' ? '🏀 Твоя команда — ' + (basketballTeam(net.side) === 0 ? 'помаранчева, ліворуч' : 'синя, праворуч') + '. Матч до ' + BASKETBALL.target + ' очок'
+  const who = net.spectator ? '👁 Спостерігач. Перетягуй мишкою, коліщатко — масштаб, подвійний клік — весь майданчик'
+    : ['basketball', 'hoops'].includes(game.kind) ? (game.kind === 'hoops' ? '🏀' : '🏐') + ' Твоя команда — ' + (basketballTeam(net.side) === 0 ? 'помаранчева, ліворуч' : 'синя, праворуч') + '. Матч до ' + (game.kind === 'hoops' ? 10 : BASKETBALL.target) + ' очок'
     : game.hardcore
     ? '☠ Хардкор! Ти — ' + CHARACTERS[char].emoji + ' ' + CHARACTERS[char].name + ' у ' + PLAYER_COLOR_NAMES[net.side] + 'му нашийнику'
     : game.team
@@ -554,8 +573,8 @@ async function startOnline(room, kind = 'normal', { quiet = false, refreshed = f
   showHud(who + '. Дай друзям код ' + net.room);
   // Просив один режим, а кімната виявилась іншою — про це треба сказати прямо,
   // інакше гравець довго не розумів би, чому нема камінців (чи пасів).
-  if (kind !== net.mode) {
-    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝', basketball: 'Ця кімната — basketball 🏀' }[net.mode]
+  if (!net.spectator && kind !== net.mode) {
+    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝', basketball: 'Ця кімната — Волейбалл 🏐', hoops: 'Ця кімната — Баскетбол 🏀' }[net.mode]
       || 'Ця кімната звичайна', false);
   }
   sfx.start();
@@ -585,7 +604,7 @@ async function reconnect(room, kind) {
     // спроби вкладаються приблизно в 40 секунд — довше за той привид.
     await sleep(Math.min(1200 * i, 5000));
     if (game.mode !== 'online' || game.net !== previous) return;        // гравець сам вийшов у меню
-    if (await startOnline(room, kind, { quiet: true })) return;
+    if (await startOnline(room, kind, { quiet: true, spectator: previous.spectator })) return;
     if (game.mode !== 'online' || game.net !== previous) return;
   }
   setNote('Кімната ' + room + ' не відповідає', true);
@@ -623,7 +642,7 @@ async function findSharedServer() {
 
 /** «Чекаємо…» / «Граєте втрьох» / «Кімната повна» — одним рядком. */
 function peerLabel(n, max, mode, sides = []) {
-  if (mode === 'basketball') {
+  if (['basketball', 'hoops'].includes(mode)) {
     const counts = basketballRoster(sides);
     return '🟠 ' + counts[0] + '/' + BASKETBALL.teamSize + ' · 🔵 ' + counts[1] + '/' + BASKETBALL.teamSize
       + (counts.some(count => count === 0) ? ' · Чекаємо на суперників…' : ' · ' + n + '/' + max + ' гравців');
@@ -646,6 +665,7 @@ function showScreen(name) {
 }
 
 function toMenu() {
+  renderer.setSpectating(false);
   cancelConnection();
   showScreen('home');
   game.net?.close();
@@ -663,6 +683,7 @@ function toMenu() {
 }
 
 function doRestart() {
+  if (game.net?.spectator) return;
   $('#gameover').hidden = true;
   banner = { text: '', t: 0 };
   game.over = false;
@@ -757,10 +778,10 @@ function showHud(tip) {
   bestCombo = 0;
   // Лічильники другої й третьої валют показуємо лише там, де їх дають, — щоб у
   // дитячій грі не світились два незрозумілі рахунки.
-  $('#skulls-hud').hidden = !game.hardcore;
-  $('#tokens-hud').hidden = !game.team;
-  $('#med').hidden = game.kind === 'basketball';
-  $('#coins-hud').hidden = game.kind === 'basketball';
+  $('#skulls-hud').hidden = !!game.net?.spectator || !game.hardcore;
+  $('#tokens-hud').hidden = !!game.net?.spectator || !game.team;
+  $('#med').hidden = !!game.net?.spectator || ['basketball', 'hoops'].includes(game.kind);
+  $('#coins-hud').hidden = !!game.net?.spectator || ['basketball', 'hoops'].includes(game.kind);
   $('#menu').hidden = true;
   $('#gameover').hidden = true;
   $('#hud').hidden = false;
@@ -825,7 +846,7 @@ function frameLocal(dt) {
     points: w.balloon.pts,
     basketball: w.basketball,
     hands: w.hands.map((h) => ({
-      id: h.id, player: h.player, x: h.x, y: h.y, flash: h.flash, slow: h.slow,
+      id: h.id, player: h.player, bot: !!h.bot, x: h.x, y: h.y, flash: h.flash, slow: h.slow,
       glove: h.glove, char: h.char, rage: h.rage, rages: h.rages, dirty: h.dirty, self: false,
       // Правило черги рахуємо тут, щоб малювальник просто малював привида,
       // а не переказував правила гри своїми словами.
@@ -876,10 +897,10 @@ function frameOnline(dt) {
   // локальна рука розходилась би з серверною рівно на цю різницю.
   const kit = handKit(snap.mode, mine?.glove ?? 0, mine?.char ?? 0);
   if (snap.team && snap.buff.speed > 0) kit.speedMul *= BUFFS[0].speedMul;
-  const g = (snap.team && (mine?.web > 0 || mine?.out)) || (snap.basketball && snap.state === 'waiting')
+  const g = game.net.spectator || (snap.team && (mine?.web > 0 || mine?.out)) || (snap.basketball && snap.state === 'waiting')
     ? { x: mine?.x ?? game.ghost.x, y: mine?.y ?? game.ghost.y }
-    : game.kind === 'basketball'
-    ? basketballHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, game.net.side)
+    : ['basketball', 'hoops'].includes(game.kind)
+    ? basketballHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, game.net.side, BASKETBALL.speed, game.kind === 'hoops')
     : advanceHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, (mine?.slow ?? 0) > 0, kit);
   game.ghost.x = g.x;
   game.ghost.y = g.y;
@@ -888,7 +909,7 @@ function frameOnline(dt) {
       ? { ...h, x: game.ghost.x, y: game.ghost.y, player: game.net.side, self: true }
       : { ...h, self: false });
 
-  if (snap.state === 'over' && !game.over) endGame(snap.score, snap.basketball);
+  if (!game.net.spectator && snap.state === 'over' && !game.over) endGame(snap.score, snap.basketball);
   if (snap.state !== 'over' && game.over) { game.over = false; $('#gameover').hidden = true; }
 
   return {
@@ -915,7 +936,7 @@ function frameOnline(dt) {
     combo: snap.combo,
     buff: snap.buff,
     level: levelInfo(snap.score, snap.mode),
-    message: snap.state === 'waiting' ? (snap.basketball ? 'Чекаємо на команду суперників…' : 'Чекаємо на друзів…') : '',
+    message: game.net.spectator && snap.state === 'over' ? 'Матч завершено · чекаємо на наступну гру' : snap.state === 'waiting' ? (snap.basketball ? 'Чекаємо на команду суперників…' : 'Чекаємо на друзів…') : '',
   };
 }
 
@@ -959,6 +980,7 @@ function idleView(dt) {
 }
 
 function onWorldEvent(e) {
+  if (game.net?.spectator) return;
   if (e.type === 'basketHit') {
     renderer.burst(e.x, e.y, PLAYER_COLORS[basketballTeam(e.player)], 0.5);
     sfx.hit(0.6);
@@ -1140,7 +1162,7 @@ function onWorldEvent(e) {
 
 function endGame(score, basketball = null) {
   game.over = true;
-  $('#gameover-title').textContent = basketball ? '🏀 Матч завершено!' : 'Кулька впала 😢';
+  $('#gameover-title').textContent = basketball ? (game.kind === 'hoops' ? '🏀' : '🏐') + ' Матч завершено!' : 'Кулька впала 😢';
   $('#classic-result').hidden = !!basketball;
   $('#basket-result').hidden = !basketball;
   if (basketball) {

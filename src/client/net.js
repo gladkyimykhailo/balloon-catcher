@@ -11,6 +11,7 @@ export class Net {
     this.ws = null;
     this.buf = [];
     this.side = 0;
+    this.spectator = false;
     this.room = '';
     this.peers = 1;
     this.sides = [];
@@ -30,7 +31,7 @@ export class Net {
    * Якщо кімната вже існує, діє ЇЇ режим: два гравці в одній кімнаті не можуть
    * грати в різні ігри, бо світ у них один. Сервер відповість, що вийшло.
    */
-  connect(url, room, mode = 'normal') {
+  connect(url, room, mode = 'normal', { spectator = false, bots = false } = {}) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       this.ws = ws;
@@ -43,12 +44,13 @@ export class Net {
         reject(new Error('Сервер не відповів вчасно'));
       }, 10000);
 
-      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '', mode }));
+      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: room || '', mode, spectator, bots }));
 
       ws.onmessage = (e) => {
         const m = JSON.parse(e.data);
         if (m.t === 'welcome') {
           this.side = m.side;
+          this.spectator = m.spectator === true;
           this.sides = m.sides ?? [m.side];
           this.peers = this.sides.length;
           this.room = m.room;
@@ -100,47 +102,47 @@ export class Net {
   }
 
   sendInput(x, y) {
-    if (this.ws?.readyState === 1) {
+    if (!this.spectator && this.ws?.readyState === 1) {
       this.ws.send(JSON.stringify({ t: 'input', x: Math.round(x), y: Math.round(y) }));
     }
   }
 
   restart() {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'restart' }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'restart' }));
   }
 
   /** Аптечку витрачає сервер — він один знає, скільки зарядів лишилось. */
   medkit() {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'medkit' }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'medkit' }));
   }
 
   /** Скін кульки спільний на кімнату: діє вибір того, хто обрав останнім. */
   setSkin(i) {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'skin', i }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'skin', i }));
   }
 
   /** Перчатка, навпаки, особиста — сервер міняє тільки твою долоню. */
   setGlove(i) {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'glove', i }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'glove', i }));
   }
 
   /** Хардкор-персонаж — річ особиста, як і перчатка. */
   setChar(i) {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'char', i }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'char', i }));
   }
 
   /** Перки тім-апа: купує кожен собі, але два з трьох діють на всю команду. */
   setPerks(mask) {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'perks', m: mask }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'perks', m: mask }));
   }
 
   /** Вдягнути рукавичку від газу — сервер вдягне її саме твоєму персонажу. */
   wear() {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'wear' }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'wear' }));
   }
 
   rage() {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'rage' }));
+    if (!this.spectator && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ t: 'rage' }));
   }
 
   close() { this.closing = true; this.ws?.close(); }
@@ -171,7 +173,7 @@ export class Net {
     const hands = b.h.map((hb) => {
       const ha = a.h.find((x) => x[0] === hb[0]) || hb;
       return {
-        id: hb[0], player: Number(String(hb[0]).slice(1)) || 0,
+        id: hb[0], player: hb[19] ?? (Number(String(hb[0]).slice(1)) || 0), bot: hb[20] === 1,
         x: ha[1] + (hb[1] - ha[1]) * k, y: ha[2] + (hb[2] - ha[2]) * k,
         flash: hb[3], slow: hb[4] ?? 0,
         glove: hb[5] ?? 0, rage: hb[6] ?? 0, rages: hb[7] ?? 0, dirty: hb[8] === 1,

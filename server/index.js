@@ -90,6 +90,8 @@ function getRoom(code, mode) {
     code,
     mode: modeOf(mode),
     clients: new Set(),
+    spectators: new Set(),
+    fillBots: false,
     world: createWorld(mode),
     acc: 0,
     last: Date.now(),
@@ -142,7 +144,7 @@ function snapshot(room) {
       // Правило черги рахує сервер: клієнт отримує готове «можеш / не можеш».
       h.lives, h.out ? 1 : 0, +h.web.toFixed(2), h.shield, w.team && !canTap(w, h) && !h.out && h.web <= 0 ? 1 : 0,
       maxLivesOf(w, h), +h.gloveOn.toFixed(2), h.gloves,
-      h.shell,
+      h.shell, h.player, h.bot ? 1 : 0,
     ]),
     g: w.gull ? [Math.round(w.gull.x), Math.round(w.gull.y), w.gull.dir, +w.gull.flap.toFixed(2)] : null,
     df: +w.deflate.toFixed(2),
@@ -152,7 +154,7 @@ function snapshot(room) {
     // більше місця в снапшоті, ніж уся решта каменя.
     sn: w.stones.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fall' ? 1 : 0, s.dead ? 1 : 0, Math.round(s.spin * 100)]),
     md: w.mode,
-    bk: w.basketball ? { score: w.basketball.score, winner: w.basketball.winner, serve: w.basketball.serve, round: w.basketball.round, angle: w.basketball.angle } : null,
+    bk: w.basketball ? { kind: w.basketball.kind, target: w.basketball.target, score: w.basketball.score, winner: w.basketball.winner, serve: w.basketball.serve, round: w.basketball.round, angle: w.basketball.angle } : null,
     tp: w.traps.map((t) => [t.id, Math.round(t.x), Math.round(t.y), t.type === 'web' ? 1 : 0, Math.round(t.life * 10)]),
     hg: w.hogs.map((h) => [h.id, Math.round(h.x), Math.round(h.y), h.dir, Math.round(h.spin * 100), ['run', 'jump', 'leave'].indexOf(h.phase)]),
     // Скунси — `sk`, скін кульки — `si`: два різні ключі. Колись обидва поля
@@ -172,22 +174,37 @@ function snapshot(room) {
 
 function broadcast(room, obj) {
   const s = JSON.stringify(obj);
-  for (const c of room.clients) {
+  for (const c of [...room.clients, ...room.spectators]) {
     if (c.readyState === 1) c.send(s);
   }
 }
 
 function hasOpponents(room) {
-  return room.mode === 'basketball'
-    ? basketballRoster([...room.clients].map(c => c.side)).every(n => n > 0)
+  return ['basketball', 'hoops'].includes(room.mode)
+    ? basketballRoster(room.world.hands.map(h => h.player)).every(n => n > 0)
     : room.clients.size >= 2;
+}
+
+function fillRoomBots(room) {
+  if (!room.fillBots) return;
+  const taken = new Set([...room.clients].map(c => c.side));
+  for (let side = 0; side < BASKETBALL.teamSize * 2; side++) {
+    const id = 'bot' + side;
+    if (taken.has(side)) removeHand(room.world, id);
+    else if (!room.world.hands.some(h => h.id === id)) {
+      const bot = addHand(room.world, id, side);
+      bot.bot = true;
+      bot.botDifficulty = 'medium';
+    }
+  }
 }
 
 function announce(room) {
   broadcast(room, {
     t: 'peers',
-    n: room.clients.size,
-    sides: [...room.clients].map((c) => c.side),
+    n: room.world.hands.length,
+    sides: room.world.hands.map(h => h.player),
+    spectators: room.spectators.size,
   });
 }
 
@@ -210,36 +227,55 @@ wss.on('connection', (ws) => {
         return;
       }
       const code = requested || makeCode();
+      if (m.spectator === true) {
+        const room = rooms.get(requested);
+        if (!room) { ws.send(JSON.stringify({ t: 'error', msg: 'Кімнату не знайдено. Перевір код.' })); return; }
+        if (room.spectators.size >= 32) { ws.send(JSON.stringify({ t: 'error', msg: 'У кімнаті вже 32 спостерігачі' })); return; }
+        ws.room = room; ws.spectator = true; ws.side = -1;
+        room.spectators.add(ws);
+        ws.send(JSON.stringify({
+          t: 'welcome', room: code, side: -1, spectator: true, mode: room.mode,
+          sides: room.world.hands.map(h => h.player),
+          maxLives: rulesFor(room.mode).lives,
+          maxPlayers: ['basketball', 'hoops'].includes(room.mode) ? 8 : MAX_PLAYERS,
+        }));
+        announce(room);
+        return;
+      }
+      const newRoom = !rooms.has(code);
       const room = getRoom(code, m.mode || (m.hc ? 'hardcore' : 'normal'));
-      const maxPlayers = room.mode === 'basketball' ? BASKETBALL.teamSize * 2 : MAX_PLAYERS;
+      if (newRoom && room.mode === 'hoops' && m.bots === true) room.fillBots = true;
+      const maxPlayers = ['basketball', 'hoops'].includes(room.mode) ? BASKETBALL.teamSize * 2 : MAX_PLAYERS;
       if (room.clients.size >= maxPlayers) {
         ws.send(JSON.stringify({ t: 'error', msg: `У цій кімнаті вже ${maxPlayers} гравці` }));
         return;
       }
       // Basketball поповнює меншу команду; інші режими беруть перший вільний слот.
       const taken = new Set([...room.clients].map((c) => c.side));
-      let side = room.mode === 'basketball' ? basketballSeat(taken) : 0;
-      if (room.mode !== 'basketball') while (taken.has(side)) side++;
+      let side = ['basketball', 'hoops'].includes(room.mode) ? basketballSeat(taken) : 0;
+      if (!['basketball', 'hoops'].includes(room.mode)) while (taken.has(side)) side++;
       ws.side = side;
       ws.room = room;
       ws.handId = 'p' + ws.side;
       room.clients.add(ws);
+      removeHand(room.world, 'bot' + ws.side);
       addHand(room.world, ws.handId, ws.side);
+      fillRoomBots(room);
       // Basketball починається, коли є гравець у кожній команді; решта може доєднатись.
       if (hasOpponents(room) && room.world.paused) {
         room.world.paused = false;
-        if (room.mode !== 'basketball') restart(room.world);
+        if (!['basketball', 'hoops'].includes(room.mode)) restart(room.world);
       }
       ws.send(JSON.stringify({
         t: 'welcome', room: code, side: ws.side, mode: room.mode,
-        sides: [...room.clients].map(c => c.side),
+        sides: room.world.hands.map(h => h.player),
         maxLives: rulesFor(room.mode).lives, maxPlayers, hc: room.mode === 'hardcore' ? 1 : 0,
       }));
       announce(room);
       return;
     }
 
-    if (!ws.room) return;
+    if (!ws.room || ws.spectator) return;
 
     if (m.t === 'input') {
       setHandTarget(ws.room.world, ws.handId, m.x, m.y);
@@ -279,9 +315,9 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     const room = ws.room;
     if (!room) return;
-    room.clients.delete(ws);
-    removeHand(room.world, ws.handId);
-    if (room.clients.size === 0) { closeRoom(room); return; }
+    if (ws.spectator) room.spectators.delete(ws);
+    else { room.clients.delete(ws); removeHand(room.world, ws.handId); fillRoomBots(room); }
+    if (room.clients.size + room.spectators.size === 0) { closeRoom(room); return; }
     // Пауза лише коли лишився один: якщо з чотирьох пішов один, гра триває.
     if (!hasOpponents(room)) room.world.paused = true;
     announce(room);

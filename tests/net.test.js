@@ -34,3 +34,21 @@ test('welcome clears the connection timeout', async t => {
   t.mock.timers.tick(10000);
   assert.equal(net.ws.closed, undefined);
 });
+
+test('spectator handshake preserves role and suppresses gameplay messages', async t => {
+  class Socket { sent = []; send(raw) { this.sent.push(JSON.parse(raw)); } close() {} readyState = 1; }
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+  Object.defineProperty(globalThis, 'WebSocket', { value: Socket, configurable: true });
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, 'WebSocket', descriptor);
+    else delete globalThis.WebSocket;
+  });
+  const net = new Net();
+  const pending = net.connect('ws://localhost', 'ABCD', 'hoops', { spectator: true });
+  net.ws.onopen();
+  assert.equal(net.ws.sent[0].spectator, true);
+  net.ws.onmessage({ data: JSON.stringify({ t: 'welcome', side: -1, spectator: true, room: 'ABCD', mode: 'hoops', maxLives: 3 }) });
+  await pending;
+  net.sendInput(300, 300); net.restart(); net.setSkin(3); net.setGlove(2); net.medkit(); net.wear(); net.rage();
+  assert.equal(net.ws.sent.length, 1);
+});

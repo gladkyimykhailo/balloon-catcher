@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, addHand, setHandTarget, step, restart, setGlove } from '../src/shared/physics.js';
-import { BASKETBALL as B, basketballHand } from '../src/shared/basketball.js';
+import { BASKETBALL as B, BOT_DIFFICULTIES, basketballHand } from '../src/shared/basketball.js';
 import { WORLD, FLOOR_Y } from '../src/shared/constants.js';
 
 const world = () => createWorld('basketball');
@@ -15,7 +15,7 @@ test('basketball has a smaller round ball, no hazards and fair equipment', () =>
   const h = addHand(w, 'h0', 0, 3, 4);
   setGlove(w, 'h0', 3);
   assert.equal(h.r, B.handRadius);
-  assert.equal(h.glove, 0);
+  assert.equal(h.glove, 3);
   assert.equal(w.medkits, 0);
   assert.equal(w.balloon.pts.length, 26);
   for (const p of w.balloon.pts) assert.ok(Math.abs(Math.hypot(p.x - 300, p.y - 240) - B.radius) < 1e-8);
@@ -102,8 +102,10 @@ test('players cannot cross the net, including malicious/invalid targets', () => 
   assert.ok(Number.isFinite(bad.x) && Number.isFinite(bad.y));
 });
 
-test('bot hits through normal collision and stays on its side', (t) => {
-  t.mock.method(Math, 'random', () => 0.74);
+test('bot always hits on contact and keeps its slower speed', (t) => {
+  t.mock.method(Math, 'random', () => 0.99);
+  assert.equal(B.botSpeed, 600);
+  assert.equal(B.botReaction, 0.28);
   const w = world(), bot = addHand(w, 'bot', 1);
   bot.bot = true;
   Object.assign(w.basketball.ball, { x: 900, y: 250, vx: 0, vy: 100 });
@@ -117,24 +119,26 @@ test('bot hits through normal collision and stays on its side', (t) => {
   assert.ok(hits > 0);
 });
 
-test('bot misses at the 75% boundary without retrying, and resets on serve', (t) => {
-  const random = t.mock.method(Math, 'random', () => 0.75);
-  const w = world(), bot = addHand(w, 'bot', 1);
-  bot.bot = true;
-  Object.assign(w.basketball.ball, { x: 900, y: 250, vx: 0, vy: 100 });
-  const before = random.mock.callCount();
-  let hits = 0;
-  for (let i = 0; i < 240 && w.state === 'playing'; i++) {
-    step(w, 1 / 60);
-    hits += w.events.filter(e => e.type === 'basketHit').length;
+test('difficulty changes bot speed and reaction and survives restart', () => {
+  for (const [difficulty, settings] of Object.entries(BOT_DIFFICULTIES)) {
+    const w = world(), bot = addHand(w, 'bot', 1);
+    bot.bot = true;
+    bot.botDifficulty = difficulty;
+    for (let run = 0; run < 2; run++) {
+      Object.assign(w.basketball.ball, { x: 900, y: 250, vx: 0, vy: 100 });
+      step(w, 1 / 120);
+      assert.ok(Math.abs(Math.hypot(bot.vx, bot.vy) - settings.speed) < 1e-6);
+      assert.equal(bot.think, settings.reaction);
+      let hits = 0;
+      for (let i = 0; i < 240 && w.state === 'playing'; i++) {
+        step(w, 1 / 60);
+        hits += w.events.filter(e => e.type === 'basketHit').length;
+      }
+      assert.ok(hits > 0, difficulty);
+      restart(w);
+      assert.equal(bot.botDifficulty, difficulty);
+    }
   }
-  assert.equal(hits, 0);
-  assert.equal(random.mock.callCount() - before, 1);
-  assert.deepEqual(w.basketball.score, [1, 0]);
-  step(w, B.pause + 0.01);
-  assert.equal(bot.botMiss, false);
-  restart(w);
-  assert.equal(bot.botMiss, false);
 });
 
 test('paused room freezes score, ball and bot until opponent returns', () => {

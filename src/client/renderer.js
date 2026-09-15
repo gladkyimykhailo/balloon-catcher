@@ -1,4 +1,5 @@
-import { BASKETBALL, basketballTeam, basketballRoster } from '../shared/basketball.js';
+import { SpectatorCamera } from './spectator-camera.js';
+import { BASKETBALL, HOOPS, basketballTeam, basketballRoster } from '../shared/basketball.js';
 import { Application, Container, FillGradient, Graphics, Text } from 'pixi.js';
 import { WORLD, FLOOR_Y, CEIL_Y, BALLOON, STONE, TRAP, BUFFS, HOG, SKUNK, PLAYER_COLORS, skinAt, gloveAt, charAt, biomeAt, ladderAt, teamLadderAt, bucketSpots } from '../shared/constants.js';
 
@@ -60,7 +61,9 @@ export class Renderer {
     this.hud = new Container();
     // Камінці — над кулькою: вони падають на неї згори, і ховати їх за
     // оболонкою означало б втратити саме той кадр, у якому ще можна відвести.
-    this.stage.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.hogsG, this.skunksG, this.gull, this.handLayer, this.gasG, this.fx, this.hud);
+    this.scene = new Container();
+    this.stage.addChild(this.scene, this.hud);
+    this.scene.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.hogsG, this.skunksG, this.gull, this.handLayer, this.gasG, this.fx);
 
     // Відблиск малюємо один раз в одиничних координатах і далі лише
     // масштабуємо/повертаємо — так він виглядає як нахилений полиск, а не як цифра.
@@ -75,9 +78,48 @@ export class Renderer {
     this.makeClouds();
     this.makeHud();
 
+    this.bindSpectatorCamera();
     this.app.renderer.on('resize', () => this.layout());
     this.layout();
     return this;
+  }
+
+  bindSpectatorCamera() {
+    this.camera = new SpectatorCamera();
+    const canvas = this.app.canvas;
+    canvas.addEventListener('pointerdown', e => {
+      if (!this.spectating) return;
+      this.cameraDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      canvas.setPointerCapture?.(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', e => {
+      const drag = this.cameraDrag;
+      if (!this.spectating || drag?.id !== e.pointerId) return;
+      this.camera.pan((e.clientX - drag.x) / this.scale, (e.clientY - drag.y) / this.scale);
+      drag.x = e.clientX; drag.y = e.clientY;
+      this.camera.apply(this.scene);
+    });
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      canvas.addEventListener(event, () => { this.cameraDrag = null; });
+    }
+    canvas.addEventListener('wheel', e => {
+      if (!this.spectating) return;
+      e.preventDefault();
+      const delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 800 : 1);
+      this.camera.magnify(delta);
+      this.camera.apply(this.scene);
+    }, { passive: false });
+    canvas.addEventListener('dblclick', () => {
+      if (this.spectating) { this.camera.reset(); this.camera.apply(this.scene); }
+    });
+  }
+
+  setSpectating(enabled) {
+    this.spectating = enabled;
+    this.cameraDrag = null;
+    this.camera.reset(enabled ? 1.25 : 1);
+    this.camera.apply(this.scene);
+    this.app.canvas.style.cursor = enabled ? 'grab' : '';
   }
 
   layout() {
@@ -131,7 +173,7 @@ export class Renderer {
   drawBackground(b) {
     const g = this.bgG;
     g.clear();
-    if (b.id === 'basketball') { this.drawCourt(g); return; }
+    if (b.id === 'basketball' || b.id === 'hoops') { this.drawCourt(g, b.id === 'hoops'); return; }
     // Reuse GPU gradient textures across biome changes and animation frames.
     g.rect(0, 0, WORLD.w, FLOOR_Y).fill(this.gradient(`sky-${b.id}`, [b.sky[0], b.sky[1]]));
     const night = b.stars;
@@ -230,7 +272,7 @@ export class Renderer {
     for (const p of bucketSpots()) drawBucket(g, p.x, p.y);
   }
 
-  drawCourt(g) {
+  drawCourt(g, hoops = false) {
     g.rect(0, 0, WORLD.w, WORLD.h).fill(this.gradient('arena', COURT.sky));
     // Tiered stands and warm arena lights, kept behind the playing field.
     for (let row = 0; row < 5; row++) {
@@ -253,6 +295,26 @@ export class Renderer {
     g.rect(WORLD.w / 2, FLOOR_Y - 6, WORLD.w / 2, 6).fill(0x69c8ff);
     g.roundRect(30, FLOOR_Y + 12, WORLD.w - 60, 48, 8).stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
     g.ellipse(WORLD.w / 2, FLOOR_Y + 36, 95, 24).stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
+    if (hoops) {
+      for (const [side, x] of [HOOPS.left, HOOPS.right].entries()) {
+        const y = HOOPS.y, half = HOOPS.half;
+        const boardX = x + (side === 0 ? -1 : 1) * (half + 12);
+        g.rect(boardX - 5, y - 130, 10, 150).fill(0xe4efff);
+        g.moveTo(boardX, y + 20).lineTo(boardX, FLOOR_Y).stroke({ color: 0x7387a0, width: 8 });
+        for (let i = 0; i <= 6; i++) {
+          const offset = -half + i * half / 3;
+          g.moveTo(x + offset, y).lineTo(x + offset * 0.65, y + 65)
+            .stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
+        }
+        for (let i = 1; i <= 3; i++) {
+          const width = half * (1 - i * 0.35 / 3);
+          g.moveTo(x - width, y + i * 65 / 3).lineTo(x + width, y + i * 65 / 3)
+            .stroke({ color: 0xffffff, width: 2, alpha: 0.7 });
+        }
+        g.ellipse(x, y, half, 7).stroke({ color: 0xff7e32, width: 6 });
+      }
+      return;
+    }
     const { netX: x, netTop: y, netHalf } = BASKETBALL;
     g.rect(x - netHalf, y, netHalf * 2, FLOOR_Y - y).fill({ color: 0xffffff, alpha: 0.22 });
     for (let at = y + 8; at < FLOOR_Y; at += 16) {
@@ -265,7 +327,7 @@ export class Renderer {
     g.roundRect(x - netHalf - 4, y - 4, netHalf * 2 + 8, 8, 4).fill(0xffffff);
   }
 
-  drawBasketball(pts, match) {
+  drawBasketball(pts, match, skin = 0) {
     const g = this.balloonG;
     g.clear();
     const x = pts.reduce((n, p) => n + p.x, 0) / pts.length;
@@ -273,7 +335,9 @@ export class Renderer {
     const r = BASKETBALL.radius;
     g.position.set(x, y);
     g.rotation = match.angle;
-    g.circle(0, 0, r).fill(this.gradient('basket-leather', [0xffd080, 0xf18a26, 0xb84b15]))
+    const colors = skin ? [0xffffff, skinAt(skin).color, skinAt(skin).dark]
+      : match.kind === 'hoops' ? [0xffd080, 0xf18a26, 0xb84b15] : [0xffffff, 0xf5e094, 0x729cce];
+    g.circle(0, 0, r).fill(this.gradient(`sport-${match.kind}-${skin}`, colors))
       .stroke({ color: 0x542d1b, width: 3 });
     g.moveTo(-r, 0).lineTo(r, 0).moveTo(0, -r).lineTo(0, r)
       .stroke({ color: 0x683416, width: 2 });
@@ -475,7 +539,7 @@ export class Renderer {
 
   draw(view, dt) {
     // Біом — чиста функція від рівня, тож клієнту досить рахунку зі снапшота.
-    this.setBiome(view.basketball ? COURT : biomeAt(view.level?.level ?? 1));
+    this.setBiome(view.basketball ? (view.basketball.kind === 'hoops' ? { ...COURT, id: 'hoops' } : COURT) : biomeAt(view.level?.level ?? 1));
     this.clouds.visible = !view.basketball;
     this.updateWeather(dt);
     for (const c of this.clouds.children) {
@@ -483,7 +547,7 @@ export class Renderer {
       if (c.x > WORLD.w + 140) c.x = -140;
     }
 
-    if (view.basketball) this.drawBasketball(view.points, view.basketball);
+    if (view.basketball) this.drawBasketball(view.points, view.basketball, view.skin ?? 0);
     else {
       this.balloonG.position.set(0, 0); this.balloonG.rotation = 0;
       this.drawBalloon(view.points, view.state, view.deflate > 0, skinAt(view.skin ?? 0));
@@ -503,6 +567,12 @@ export class Renderer {
       if (hd.out) continue;
       alive.add(hd.id);
       const h = this.ensureHand(hd.id, view.basketball ? basketballTeam(hd.player) : hd.player, hd.self, hd.glove ?? 0, hd.char ?? 0, !!view.hardcore);
+      if (hd.bot && !h.botLabel) {
+        h.botLabel = new Text({ text: 'БОТ', style: { fontFamily: 'sans-serif', fontSize: 18, fontWeight: 'bold', fill: 0xffffff } });
+        h.botLabel.anchor.set(0.5); h.botLabel.y = 66;
+        h.view.addChild(h.botLabel);
+      }
+      if (h.botLabel) h.botLabel.visible = !!hd.bot;
       if (h.lx === null) { h.lx = hd.x; h.ly = hd.y; h.view.position.set(hd.x, hd.y); }
       const vx = hd.x - h.lx;
       const vy = hd.y - h.ly;
@@ -524,7 +594,7 @@ export class Renderer {
       // морда догори ногами читається як помилка, а не як замах. Тому йому
       // лишаємо лише легкий нахил у бік руху.
       h.view.rotation = h.hardcore ? h.angle * 0.3 : h.angle;
-      const s = (1 + h.pop * 0.22) * h.base * (view.team && view.buff?.size > 0 ? BUFFS[1].sizeMul : 1) * (view.basketball ? BASKETBALL.handRadius / 54 : 1);
+      const s = (1 + h.pop * 0.22) * (view.basketball ? 1 : h.base) * (view.team && view.buff?.size > 0 ? BUFFS[1].sizeMul : 1) * (view.basketball ? BASKETBALL.handRadius / 54 : 1);
       h.view.scale.set(s, s * (1 - h.pop * 0.12));
       // Поки долоня обважніла після удару, вона бліда — видно, чому не встигає.
       h.view.alpha = hd.slow > 0 ? 0.6 : 1;
@@ -666,7 +736,7 @@ export class Renderer {
       this.team.visible = false;
       this.scoreText.text = view.basketball.score.join(' : ');
       const counts = basketballRoster(view.hands.map(h => h.player));
-      this.matchText.text = '🟠 ' + counts[0] + '/' + BASKETBALL.teamSize + '   ·   до ' + BASKETBALL.target + ' очок   ·   ' + counts[1] + '/' + BASKETBALL.teamSize + ' 🔵';
+      this.matchText.text = '🟠 ' + counts[0] + '/' + BASKETBALL.teamSize + '   ·   до ' + (view.basketball.target ?? BASKETBALL.target) + ' очок   ·   ' + counts[1] + '/' + BASKETBALL.teamSize + ' 🔵';
     }
     this.msg.text = view.message || '';
     this.msg.visible = !!view.message;

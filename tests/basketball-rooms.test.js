@@ -26,12 +26,12 @@ function server() {
     process: { env: {}, exit: code => { throw Error('Unexpected exit ' + code); } },
     setInterval: () => 1, clearInterval: () => {},
   });
-  app.connect = (room = '', mode = 'basketball') => {
+  app.connect = (room = '', mode = 'basketball', options = {}) => {
     const ws = new EventEmitter();
     ws.readyState = 1; ws.messages = [];
     ws.send = text => ws.messages.push(JSON.parse(text));
     app.wss.emit('connection', ws);
-    ws.emit('message', JSON.stringify({ t: 'join', room, mode }));
+    ws.emit('message', JSON.stringify({ t: 'join', room, mode, ...options }));
     return ws;
   };
   return app;
@@ -157,4 +157,97 @@ test('HTTP rejects malformed URLs and traversal into sibling directories', () =>
     assert.doesNotThrow(() => app.server.request({ url }, res));
     assert.equal(status, expected);
   }
+});
+
+test('hoops rooms share baskets, cosmetics and mode with joining clients', () => {
+  const app = server(), host = app.connect('', 'hoops');
+  const guest = app.connect(host.room.code);
+  const room = host.room;
+  assert.equal(guest.messages.find(m => m.t === 'welcome').mode, 'hoops');
+  assert.equal(room.world.paused, false);
+  host.emit('message', JSON.stringify({ t: 'skin', i: 2 }));
+  host.emit('message', JSON.stringify({ t: 'glove', i: 3 }));
+  Object.assign(room.world.basketball.ball, {
+    x: basketball.HOOPS.right, y: basketball.HOOPS.y - 1, vx: 0, vy: 300,
+  });
+  room.last -= 40;
+  app.tickRoom(room);
+  for (const ws of [host, guest]) {
+    const snapshot = ws.messages.findLast(m => m.t === 'snap');
+    const client = new Net();
+    client.push(snapshot);
+    const view = client.sample();
+    assert.equal(view.basketball.kind, 'hoops');
+    assert.equal(view.basketball.target, 10);
+    assert.deepEqual(view.basketball.score, [2, 0]);
+    assert.equal(view.skin, 2);
+    assert.equal(view.hands.find(h => h.player === 0).glove, 3);
+  }
+  for (let i = 0; i < 6; i++) app.connect(room.code);
+  assert.deepEqual(basketball.basketballRoster([...room.clients].map(c => c.side)), [4, 4]);
+  assert.ok(app.connect(room.code).messages.some(m => m.t === 'error'));
+});
+
+test('basketball room bots fill seats, yield to people and return on departure', () => {
+  const app = server(), host = app.connect('', 'hoops', { bots: true });
+  const room = host.room;
+  assert.equal(room.world.hands.length, 8);
+  assert.equal(room.world.hands.filter(h => h.bot).length, 7);
+  assert.equal(room.world.paused, false);
+  const guest = app.connect(room.code);
+  assert.equal(room.world.hands.length, 8);
+  assert.equal(room.world.hands.find(h => h.player === guest.side).bot, undefined);
+  room.last -= 40; app.tickRoom(room);
+  const client = new Net(); client.push(host.messages.findLast(m => m.t === 'snap'));
+  const hands = client.sample().hands;
+  assert.equal(new Set(hands.map(h => h.player)).size, 8);
+  assert.equal(hands.filter(h => h.bot).length, 6);
+  guest.emit('close');
+  assert.equal(room.world.hands.find(h => h.player === guest.side).bot, true);
+  host.emit('close');
+  assert.equal(app.rooms.size, 0);
+});
+
+test('spectators can watch full rooms but cannot change the match', () => {
+  const app = server(), host = app.connect('', 'hoops');
+  for (let i = 0; i < 7; i++) app.connect(host.room.code);
+  const room = host.room, watch = app.connect(room.code, 'normal', { spectator: true });
+  assert.equal(watch.messages.find(m => m.t === 'welcome').spectator, true);
+  assert.equal(room.clients.size, 8);
+  assert.equal(room.world.hands.length, 8);
+  assert.equal(room.spectators.size, 1);
+  const before = structuredClone(room.world);
+  for (const t of ['input', 'restart', 'skin', 'glove', 'char', 'perks', 'wear', 'rage', 'medkit']) {
+    watch.emit('message', JSON.stringify({ t, i: 4, x: 100, y: 100, m: 7 }));
+  }
+  assert.deepEqual(room.world, before);
+  room.last -= 40; app.tickRoom(room);
+  assert.ok(watch.messages.some(m => m.t === 'snap'));
+  watch.emit('close');
+  assert.equal(room.world.hands.length, 8);
+  assert.equal(room.spectators.size, 0);
+});
+
+test('spectators cannot create a room or start a match by joining', () => {
+  const app = server();
+  const missing = app.connect('ABCD', 'hoops', { spectator: true });
+  assert.ok(missing.messages.some(m => m.t === 'error'));
+  assert.equal(app.rooms.size, 0);
+  const host = app.connect();
+  const watch = app.connect(host.room.code, 'normal', { spectator: true });
+  assert.equal(host.room.world.paused, true);
+  host.emit('close');
+  assert.equal(watch.room.world.hands.length, 0);
+  watch.emit('close');
+  assert.equal(app.rooms.size, 0);
+});
+
+test('bots continue playing when the last player leaves a spectator watching', () => {
+  const app = server(), host = app.connect('', 'hoops', { bots: true });
+  const watch = app.connect(host.room.code, 'hoops', { spectator: true });
+  host.emit('close');
+  assert.equal(watch.room.world.hands.filter(h => h.bot).length, 8);
+  assert.equal(watch.room.world.paused, false);
+  watch.emit('close');
+  assert.equal(app.rooms.size, 0);
 });

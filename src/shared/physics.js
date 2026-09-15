@@ -98,7 +98,7 @@ export function createWorld(mode = 'normal') {
     events: [],            // події для звуку/частинок: {type,x,y,player}
   };
   spawnBalloon(w, WORLD.w / 2, 220);
-  if (m === 'basketball') resetBasketball(w);
+  if (['basketball', 'hoops'].includes(m)) resetBasketball(w);
   return w;
 }
 
@@ -186,7 +186,7 @@ export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
   h.char = clampIndex(char);
   h.lives = teamLives(h);
   applyKit(w, h);
-  if (w.mode === 'basketball') placeBasketballHand(h);
+  if (['basketball', 'hoops'].includes(w.mode)) placeBasketballHand(h);
   w.hands.push(h);
   return h;
 }
@@ -252,7 +252,7 @@ function buffedKit(w, h) {
  * читала `h.r` і нічого не знала ні про перчатки, ні про персонажів.
  */
 function applyKit(w, h) {
-  if (w.mode === 'basketball') return handKit('normal', 0, 0);
+  if (['basketball', 'hoops'].includes(w.mode)) return handKit('normal', 0, 0);
   const kit = kitOf(w, h);
   h.r = HAND.r * kit.sizeMul;
   if (!kit.rage) h.rage = 0;         // не боксерська — шал гасне
@@ -271,7 +271,7 @@ function clampIndex(i) {
 
 /** Хардкор-персонаж. Річ особиста, як і перчатка, тож міняється в одній руці. */
 export function setChar(w, id, i, hand = null) {
-  if (w.mode === 'basketball') return;
+  if (['basketball', 'hoops'].includes(w.mode)) return;
   const h = hand ?? getHand(w, id);
   if (!h) return;
   h.char = clampIndex(i);
@@ -283,7 +283,6 @@ export function setChar(w, id, i, hand = null) {
  * далі просто читала `h.r` і нічого не знала про скіни.
  */
 export function setGlove(w, id, i, hand = null) {
-  if (w.mode === 'basketball') return;
   const h = hand ?? getHand(w, id);
   if (!h) return;
   h.glove = clampIndex(i);
@@ -324,7 +323,6 @@ export function useRage(w, handId) {
  * шипа, штраф долоні) мусять бути однакові для всіх, хто грає в цій кімнаті.
  */
 export function setSkin(w, i) {
-  if (w.mode === 'basketball') return;
   w.skin = Math.max(0, Math.min(i | 0, 99));
 }
 
@@ -348,7 +346,7 @@ export function setHandTarget(w, id, x, y) {
 
 export function step(w, dt) {
   if (!Number.isFinite(dt) || dt <= 0) { w.events.length = 0; return; }
-  if (w.mode === 'basketball') { stepBasketball(w, dt); return; }
+  if (['basketball', 'hoops'].includes(w.mode)) { stepBasketball(w, dt); return; }
   w.time += dt;
   w.tick++;
   w.events.length = 0;
@@ -1787,7 +1785,7 @@ function teamLose(w, x, n = 1) {
 }
 
 export function restart(w) {
-  if (w.mode === 'basketball') { resetBasketball(w); return; }
+  if (['basketball', 'hoops'].includes(w.mode)) { resetBasketball(w); return; }
   w.score = 0;
   w.level = 1;
   w.gull = null;

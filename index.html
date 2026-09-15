@@ -195,6 +195,10 @@
   .basketball-option h3 { margin: 0 0 6px; font-size: 19px; }
   .basketball-option p { margin: 0 0 12px; font-size: 14px; line-height: 1.45; color: #c6d6e6; }
   .basketball-option > button { width: 100%; background: #e9802c; }
+  #hoops-room-bots { width: 20px; height: 20px; padding: 0; vertical-align: middle; accent-color: #e9802c; }
+  .bot-difficulty { display: grid; gap: 8px; margin-bottom: 14px; color: #c6d6e6; }
+  .bot-difficulty select { width: 100%; padding: 12px; border: 1px solid #496079;
+    border-radius: 10px; background: #30465d; color: #fff; font: inherit; }
   .basketball-option .row { flex-wrap: wrap; }
   .basketball-option .row > * { flex: 1 1 130px; min-width: 0; }
   .basketball-code-label { font-size: 13px; color: #c6d6e6; }
@@ -257,8 +261,14 @@
           <button class="menu-btn green" data-go="team">
             <b>🤝 Тім-ап</b><i>кулька ходить по руках: тапнув — пасуй</i>
           </button>
+          <button class="menu-btn basketball-card" data-go="hoops">
+            <b>🏀 Баскетбол</b><i>кошики, кидки та команди 4 на 4</i>
+          </button>
           <button class="menu-btn basketball-card" data-go="basketball">
-            <b>🏀 Basketball</b><i>гра з ботом або команди 4 на 4</i>
+            <b>🏐 Волейбалл</b><i>гра з ботом або команди 4 на 4</i>
+          </button>
+          <button class="menu-btn blue online-block" data-go="spectator">
+            <b>👁 Спостерігач</b><i>дивись матч у кімнаті за кодом</i>
           </button>
           <button class="menu-btn blue" data-go="shop">
             <b>🛍 Магазин</b><i>кульки, перчатки й здібності всіх режимів</i>
@@ -337,15 +347,24 @@
       </section>
 
       <section class="screen basketball-window" data-screen="basketball" aria-labelledby="basketball-title" hidden>
-        <div class="bar"><button class="back" data-go="home" aria-label="Назад у головне меню">←</button><h2 id="basketball-title">🏀 Basketball</h2></div>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад у головне меню">←</button><h2 id="basketball-title">🏐 Волейбалл</h2></div>
         <p class="basketball-subtitle">Обери, з ким вийдеш на майданчик</p>
         <div class="basketball-teams" aria-label="Дві команди по чотири гравці">
           <span>🟠 До 4 гравців</span><b>VS</b><span>🔵 До 4 гравців</span>
         </div>
+        <button class="blue" data-go="shop">🧤 Перчатки та скіни</button>
+        <p class="basketball-subtitle">Вибір із магазину діє в обох спортивних режимах. Тут скіни й перчатки змінюють вигляд.</p>
         <div class="stack">
           <div class="basketball-option">
             <h3>🤖 Гра з ботом</h3>
             <p>Ти проти комп’ютера. Грай одразу, без кімнати.</p>
+            <label class="bot-difficulty" for="bot-difficulty">Складність бота
+              <select id="bot-difficulty">
+                <option value="easy">Ізі — повільний</option>
+                <option value="medium" selected>Мідіум — звичайний</option>
+                <option value="hard">Хард — швидкий</option>
+              </select>
+            </label>
             <button id="btn-basket-bot">Грати з ботом →</button>
           </div>
           <div class="basketball-option">
@@ -365,6 +384,58 @@
         </div>
         <p class="basketball-rules">М’яч торкнувся підлоги суперників — +1 очко. Перемога при 5 очках.<br />
           Керуй мишкою, дотиком або WASD.</p>
+      </section>
+
+      <section class="screen basketball-window" data-screen="hoops" aria-labelledby="hoops-title" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад у головне меню">←</button><h2 id="hoops-title">🏀 Баскетбол</h2></div>
+        <p class="basketball-subtitle">Обери, з ким вийдеш на майданчик</p>
+        <div class="basketball-teams" aria-label="Дві команди по чотири гравці">
+          <span>🟠 До 4 гравців</span><b>VS</b><span>🔵 До 4 гравців</span>
+        </div>
+        <button class="blue" data-go="shop">🧤 Перчатки та скіни</button>
+        <p class="basketball-subtitle">Вибір із магазину діє в обох спортивних режимах. Тут скіни й перчатки змінюють вигляд.</p>
+        <div class="stack">
+          <div class="basketball-option">
+            <h3>🤖 Гра з ботом</h3>
+            <p>Ти проти комп’ютера. Грай одразу, без кімнати.</p>
+            <label class="bot-difficulty" for="hoops-difficulty">Складність бота
+              <select id="hoops-difficulty">
+                <option value="easy">Ізі — повільний</option>
+                <option value="medium" selected>Мідіум — звичайний</option>
+                <option value="hard">Хард — швидкий</option>
+              </select>
+            </label>
+            <button id="btn-hoops-bot">Грати з ботом →</button>
+          </div>
+          <div class="basketball-option">
+            <h3>👥 Кімната 4 на 4</h3>
+            <p>Запроси друзів або приєднайся за кодом. До 8 гравців, спільний рахунок команди.</p>
+            <div class="online-block stack">
+              <label><input type="checkbox" id="hoops-room-bots" checked /> Заповнити вільні місця ботами (4 на 4)</label>
+              <button id="btn-hoops-host" class="blue">Створити кімнату</button>
+              <label for="room-hoops" class="basketball-code-label">Маєш код кімнати?</label>
+              <div class="row">
+                <input id="room-hoops" type="text" maxlength="4" placeholder="КОД" autocomplete="off"
+                       autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <button id="btn-hoops-join" class="blue">Приєднатись</button>
+              </div>
+            </div>
+            <p class="basketball-offline" role="status">Сервер кімнат зараз не підключений. З ботом можна грати одразу.</p>
+          </div>
+        </div>
+        <p class="basketball-rules">Закинь м’яч у кошик суперника — +2 очки. Перемога при 10 очках.<br />
+          Рухайся всім майданчиком. Торкнись м’яча, щоб кинути в кошик. Керуй мишкою, дотиком або WASD.</p>
+      </section>
+
+      <section class="screen" data-screen="spectator" hidden>
+        <div class="bar"><button class="back" data-go="home">←</button><h2>👁 Спостерігач</h2></div>
+        <p>Введи код кімнати, у якій грають друзі. Ти дивитимешся матч без участі у грі.</p>
+        <label for="room-watch">Код кімнати</label>
+        <div class="row">
+          <input id="room-watch" maxlength="4" placeholder="КОД" autocomplete="off" />
+          <button id="btn-watch" class="blue">Дивитися →</button>
+        </div>
+        <p>Затисни мишку й рухай огляд. Коліщатко — масштаб, подвійний клік — весь майданчик. На сенсорі перетягуй пальцем.</p>
       </section>
 
       <section class="screen" data-screen="shop" hidden>
