@@ -150,7 +150,7 @@ export class Renderer {
     if (b.id === 'meadow') {
       // A faint rainbow stays behind the action and the landscape.
       [0xff9aa8, 0xffcc92, 0xffedab, 0xa7e4be, 0x9cceee].forEach((color, i) => {
-        g.arc(280, FLOOR_Y - 32, 240 - i * 12, Math.PI, Math.PI * 2)
+        g.beginPath().arc(280, FLOOR_Y - 32, 240 - i * 12, Math.PI, Math.PI * 2)
           .stroke({ color, width: 12, alpha: 0.2 });
       });
     }

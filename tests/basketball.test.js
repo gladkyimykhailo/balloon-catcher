@@ -102,7 +102,8 @@ test('players cannot cross the net, including malicious/invalid targets', () => 
   assert.ok(Number.isFinite(bad.x) && Number.isFinite(bad.y));
 });
 
-test('bot hits through normal collision and stays on its side', () => {
+test('bot hits through normal collision and stays on its side', (t) => {
+  t.mock.method(Math, 'random', () => 0.74);
   const w = world(), bot = addHand(w, 'bot', 1);
   bot.bot = true;
   Object.assign(w.basketball.ball, { x: 900, y: 250, vx: 0, vy: 100 });
@@ -111,9 +112,29 @@ test('bot hits through normal collision and stays on its side', () => {
     step(w, 1 / 60);
     hits += w.events.filter(e => e.type === 'basketHit' && e.player === 1).length;
     assert.ok(bot.x - bot.r >= B.netX + B.netHalf);
-    assert.ok(Math.hypot(bot.vx, bot.vy) <= B.speed + 1e-6);
+    assert.ok(Math.hypot(bot.vx, bot.vy) <= B.botSpeed + 1e-6);
   }
   assert.ok(hits > 0);
+});
+
+test('bot misses at the 75% boundary without retrying, and resets on serve', (t) => {
+  const random = t.mock.method(Math, 'random', () => 0.75);
+  const w = world(), bot = addHand(w, 'bot', 1);
+  bot.bot = true;
+  Object.assign(w.basketball.ball, { x: 900, y: 250, vx: 0, vy: 100 });
+  const before = random.mock.callCount();
+  let hits = 0;
+  for (let i = 0; i < 240 && w.state === 'playing'; i++) {
+    step(w, 1 / 60);
+    hits += w.events.filter(e => e.type === 'basketHit').length;
+  }
+  assert.equal(hits, 0);
+  assert.equal(random.mock.callCount() - before, 1);
+  assert.deepEqual(w.basketball.score, [1, 0]);
+  step(w, B.pause + 0.01);
+  assert.equal(bot.botMiss, false);
+  restart(w);
+  assert.equal(bot.botMiss, false);
 });
 
 test('paused room freezes score, ball and bot until opponent returns', () => {

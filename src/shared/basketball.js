@@ -3,6 +3,7 @@ import { WORLD, FLOOR_Y, CEIL_Y } from './constants.js';
 export const BASKETBALL = {
   teamSize: 4, target: 5, radius: 32, handRadius: 42, gravity: 700,
   netX: WORLD.w / 2, netTop: 400, netHalf: 8, speed: 1000, pause: 1.3,
+  botSpeed: 600, botReaction: 0.28, botHitChance: 0.75,
 };
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
@@ -31,7 +32,7 @@ export function basketballSpawn(player) {
   return { x: team === 0 ? offset : WORLD.w - offset, y: FLOOR_Y - 110 };
 }
 
-export function basketballHand(x, y, tx, ty, dt, player) {
+export function basketballHand(x, y, tx, ty, dt, player, speed = BASKETBALL.speed) {
   const side = basketballTeam(player);
   const r = BASKETBALL.handRadius;
   const lo = side === 0 ? r : BASKETBALL.netX + BASKETBALL.netHalf + r;
@@ -39,7 +40,7 @@ export function basketballHand(x, y, tx, ty, dt, player) {
   tx = clamp(Number.isFinite(tx) ? tx : x, lo, hi);
   ty = clamp(Number.isFinite(ty) ? ty : y, CEIL_Y + r, FLOOR_Y - r);
   const dx = tx - x, dy = ty - y, d = Math.hypot(dx, dy);
-  const k = d ? Math.min(1, BASKETBALL.speed * dt / d) : 0;
+  const k = d ? Math.min(1, speed * dt / d) : 0;
   return { x: clamp(x + dx * k, lo, hi), y: clamp(y + dy * k, CEIL_Y + r, FLOOR_Y - r) };
 }
 
@@ -50,6 +51,7 @@ export function placeBasketballHand(h) {
   h.r = BASKETBALL.handRadius;
   h.vx = h.vy = h.flash = h.slow = h.cooldown = 0;
   h.touching = false;
+  h.think = 0; h.botMiss = false;
   h.glove = h.char = 0;
   h.rages = h.gloves = h.shell = 0;
 }
@@ -66,7 +68,9 @@ function serve(w) {
   const m = w.basketball;
   m.ball = { x: WORLD.w * (m.serve === 0 ? 0.25 : 0.75), y: 240, vx: 0, vy: 0 };
   m.angle = 0;
-  for (const h of w.hands) { h.touching = false; h.cooldown = 0; }
+  for (const h of w.hands) {
+    h.touching = false; h.cooldown = 0; h.think = 0; h.botMiss = false;
+  }
   syncPoints(w);
 }
 
@@ -82,11 +86,12 @@ function syncPoints(w) {
 
 function botTarget(w, h, dt) {
   const b = w.basketball.ball;
+  if (b.x < BASKETBALL.netX - BASKETBALL.radius) h.botMiss = false;
   h.think = (h.think ?? 0) - dt;
   if (h.think > 0) return;
-  h.think = 0.14;
+  h.think = BASKETBALL.botReaction;
   // Reacts with a delay and aims behind/below the ball. It uses the same
-  // movement limits and collisions as a human, without teleporting the ball.
+  // collisions as a human, with a lower movement speed.
   if (b.x > BASKETBALL.netX - 70) {
     h.tx = b.x + b.vx * 0.14 + 25;
     h.ty = b.y + 68;
@@ -140,6 +145,14 @@ function moveBall(w, dt) {
     if (!h.active || h.out) continue;
     const dx = b.x - h.x, dy = b.y - h.y, d = Math.hypot(dx, dy);
     if (d >= r + h.r) { h.touching = false; continue; }
+    // Roll once for an incoming ball; a miss cannot become a hit next substep.
+    if (h.bot) {
+      if (h.botMiss) continue;
+      if (!h.touching && h.cooldown <= 0 && Math.random() >= BASKETBALL.botHitChance) {
+        h.botMiss = true;
+        continue;
+      }
+    }
     const nx = d ? dx / d : 0, ny = d ? dy / d : -1;
     b.x = h.x + nx * (r + h.r); b.y = h.y + ny * (r + h.r);
     if (!h.touching && h.cooldown <= 0) {
@@ -166,7 +179,8 @@ export function stepBasketball(w, dt) {
   for (let i = 0; i < steps; i++) {
     for (const h of w.hands) {
       if (h.bot && w.state === 'playing') botTarget(w, h, sub);
-      const p = basketballHand(h.x, h.y, h.tx, h.ty, sub, h.player);
+      const p = basketballHand(h.x, h.y, h.tx, h.ty, sub, h.player,
+        h.bot ? BASKETBALL.botSpeed : BASKETBALL.speed);
       h.px = h.x; h.py = h.y;
       h.vx = (p.x - h.x) / sub; h.vy = (p.y - h.y) / sub;
       h.x = p.x; h.y = p.y;
