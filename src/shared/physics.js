@@ -1,3 +1,5 @@
+import { normalizeCustomLevel, applyCustomLevel } from './custom-level.js';
+import { resetFootball, stepFootball, placeFootballPlayer } from './football.js';
 import { resetBasketball, stepBasketball, placeBasketballHand } from './basketball.js';
 import { cornerPenalty } from './corner.js';
 // М'яка фізика повітряної кульки.
@@ -43,11 +45,12 @@ export function levelInfo(score, mode = 'normal') {
  * свої рівні, камінці з неба і персонажі замість перчаток. Прапорець живе саме
  * у світі, бо все це має бути однаковим для всіх, хто грає в цій кімнаті.
  */
-export function createWorld(mode = 'normal') {
+export function createWorld(mode = 'normal', custom = null) {
   const m = modeOf(mode);
   const R = rulesFor(m);
   const w = {
     mode: m,
+    custom: custom ? normalizeCustomLevel({ ...custom, mode: m }) : null,
     // Два прапорці замість одного рядка всюди: перевірок на режим у фізиці
     // десятки, і `w.hardcore` читається краще за `w.mode === 'hardcore'`.
     hardcore: m === 'hardcore',
@@ -98,7 +101,9 @@ export function createWorld(mode = 'normal') {
     events: [],            // події для звуку/частинок: {type,x,y,player}
   };
   spawnBalloon(w, WORLD.w / 2, 220);
+  if (m === 'football') resetFootball(w);
   if (['basketball', 'hoops'].includes(m)) resetBasketball(w);
+  applyCustomLevel(w);
   return w;
 }
 
@@ -184,8 +189,9 @@ export function addHand(w, id, player, glove = 0, char = 0, perks = 0) {
   };
   h.glove = clampIndex(glove);
   h.char = clampIndex(char);
-  h.lives = teamLives(h);
+  h.lives = w.custom?.lives ?? teamLives(h);
   applyKit(w, h);
+  if (w.mode === 'football') placeFootballPlayer(h);
   if (['basketball', 'hoops'].includes(w.mode)) placeBasketballHand(h);
   w.hands.push(h);
   return h;
@@ -202,7 +208,7 @@ function teamLives(h) {
  * видно, а не вгадуватись.
  */
 export function maxLivesOf(w, h) {
-  return w.team ? teamLives(h) : rulesFor(w.mode).lives;
+  return w.custom?.lives ?? (w.team ? teamLives(h) : rulesFor(w.mode).lives);
 }
 
 /** Перки гравця. Як перчатка й персонаж — річ особиста, надсилається клієнтом. */
@@ -252,7 +258,7 @@ function buffedKit(w, h) {
  * читала `h.r` і нічого не знала ні про перчатки, ні про персонажів.
  */
 function applyKit(w, h) {
-  if (['basketball', 'hoops'].includes(w.mode)) return handKit('normal', 0, 0);
+  if (['basketball', 'hoops', 'football'].includes(w.mode)) return handKit('normal', 0, 0);
   const kit = kitOf(w, h);
   h.r = HAND.r * kit.sizeMul;
   if (!kit.rage) h.rage = 0;         // не боксерська — шал гасне
@@ -271,7 +277,7 @@ function clampIndex(i) {
 
 /** Хардкор-персонаж. Річ особиста, як і перчатка, тож міняється в одній руці. */
 export function setChar(w, id, i, hand = null) {
-  if (['basketball', 'hoops'].includes(w.mode)) return;
+  if (['basketball', 'hoops', 'football'].includes(w.mode)) return;
   const h = hand ?? getHand(w, id);
   if (!h) return;
   h.char = clampIndex(i);
@@ -346,6 +352,8 @@ export function setHandTarget(w, id, x, y) {
 
 export function step(w, dt) {
   if (!Number.isFinite(dt) || dt <= 0) { w.events.length = 0; return; }
+  dt *= w.custom?.pace ?? 1;
+  if (w.mode === 'football') { stepFootball(w, dt); return; }
   if (['basketball', 'hoops'].includes(w.mode)) { stepBasketball(w, dt); return; }
   w.time += dt;
   w.tick++;
@@ -353,6 +361,7 @@ export function step(w, dt) {
 
   moveHands(w, dt);
   if (w.paused) return;   // долоні рухаються, кулька висить на місці
+  if (w.custom?.hazards !== false) {
   updateGull(w, dt);
   updatePoops(w, dt);
   updateWashing(w);
@@ -361,6 +370,7 @@ export function step(w, dt) {
   updateTraps(w, dt);
   updateHogs(w, dt);
   updateSkunks(w, dt);
+  }
   updateBuffs(w, dt);
   updateInflation(w, dt);
 
@@ -378,6 +388,9 @@ export function step(w, dt) {
   for (let s = 0; s < SUBSTEPS; s++) {
     // Долоню рухаємо всередині підкроків теж — інакше швидкий ляпас "протикає" оболонку.
     substep(w, h, (s + 1) / SUBSTEPS);
+    if (w.custom && w.score >= w.custom.target) {
+      w.customWon = true; w.state = 'over'; return;
+    }
     // Якщо кульки посеред підкроків не стало, далі крутити фізику нічого:
     // checkFloor унизу зарахував би ще й падіння, тобто друге серце за одну й
     // ту саму смерть.
@@ -588,15 +601,15 @@ export function useMedkit(w, handId = null) {
   // заразом виплутує його з павутини: сидіти в ній і тримати заряд намарне
   // було б безглуздо.
   const canHeal = w.team
-    ? hands.some((h) => !h.out && h.lives < teamLives(h))
-    : w.lives < rulesFor(w.mode).lives;
+    ? hands.some((h) => !h.out && h.lives < maxLivesOf(w, h))
+    : w.lives < maxLivesOf(w);
   const canFreshen = hands.some((h) => h.slow > 0 || (w.team && h.web > 0));
   if (!canHeal && !canFreshen) return null;
 
   w.medkits--;
   if (canHeal) {
-    if (w.team) for (const h of hands) { if (!h.out) h.lives = Math.min(teamLives(h), h.lives + MEDKIT.heal); }
-    else w.lives = Math.min(rulesFor(w.mode).lives, w.lives + MEDKIT.heal);
+    if (w.team) for (const h of hands) { if (!h.out) h.lives = Math.min(maxLivesOf(w, h), h.lives + MEDKIT.heal); }
+    else w.lives = Math.min(maxLivesOf(w), w.lives + MEDKIT.heal);
   }
   for (const h of hands) { h.slow = 0; h.web = 0; }
   return { type: 'heal', x: WORLD.w / 2, y: 230, player: -1, level: w.medkits, healed: canHeal };
@@ -1785,7 +1798,8 @@ function teamLose(w, x, n = 1) {
 }
 
 export function restart(w) {
-  if (['basketball', 'hoops'].includes(w.mode)) { resetBasketball(w); return; }
+  if (w.mode === 'football') { resetFootball(w); applyCustomLevel(w); return; }
+  if (['basketball', 'hoops'].includes(w.mode)) { resetBasketball(w); applyCustomLevel(w); return; }
   w.score = 0;
   w.level = 1;
   w.gull = null;
@@ -1821,6 +1835,7 @@ export function restart(w) {
     refillShell(w, h);
     h.gloveOn = 0; h.gloves = SKUNK.glovePerLevel; h.gasT = 0;
   }
+  applyCustomLevel(w);
 }
 
 // -------------------------------------------------------------- допоміжне

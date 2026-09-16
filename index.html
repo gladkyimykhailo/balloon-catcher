@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="theme-color" content="#8fd3f4" />
-<title>Не впусти кульку!</title>
+<title>Shelter Games</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎈</text></svg>" />
 <style>
   :root {
@@ -45,6 +45,27 @@
   button.blue { background: var(--blue); }
   button.ghost { background: #dfeaf2; color: var(--ink); }
   .stack { display: grid; gap: 10px; }
+  #custom-form { display: grid; gap: 14px; text-align: left; }
+  #custom-form label { display: grid; gap: 5px; font-weight: 700; }
+  #custom-form input:not([type="checkbox"]), #custom-form select, #custom-saved {
+    width: 100%; min-width: 0; padding: 10px; font: inherit; border: 2px solid #cfe0ea; border-radius: 10px;
+    background: white; color: var(--ink); letter-spacing: normal; text-transform: none; }
+  #custom-form input[type="checkbox"] { width: auto; }
+  #custom-form fieldset { min-width: 0; border: 1px solid #cfe0ea; border-radius: 12px; display: grid; gap: 10px; }
+  #custom-form fieldset[hidden] { display: none; }
+  #custom-preview { display: block; width: 100%; border-radius: 12px; touch-action: none; cursor: crosshair; }
+  #custom-form .row > label { min-width: 0; }
+  #custom-status { min-height: 1.5em; font-size: 14px; }
+  #achievement-list { display: grid; gap: 10px; text-align: left; }
+  .achievement { padding: 14px; border: 2px solid #d6e2ec; border-radius: 16px; background: #f0f5f9; }
+  .achievement.unlocked { border-color: #e8b949; background: #fff6d9; }
+  .achievement p { margin: 6px 0; font-size: 14px; }
+  .achievement span { font-size: 13px; font-weight: 800; }
+  .achievement progress { display: block; width: 100%; height: 8px; margin-top: 8px; accent-color: #d69a13; }
+  #achievement-toast { position: fixed; z-index: 30; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
+    transform: translateX(-50%); width: max-content; max-width: 90vw; padding: 14px 20px;
+    border: 2px solid #e8b949; border-radius: 18px; background: #fff6d9; color: var(--ink);
+    box-shadow: 0 8px 30px #123a5233; font-weight: 800; text-align: center; pointer-events: none; }
   .row { display: flex; gap: 10px; }
   .row > * { flex: 1; }
 
@@ -237,6 +258,21 @@
   }
 
   [hidden] { display: none !important; }
+
+  .arcade-panel { position: fixed; inset: 0; z-index: 100; background: #101c32; color: #edf5ff; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px max(12px, env(safe-area-inset-left)); overflow-y: auto; }
+  .arcade-panel .arcade-header { width: min(900px, 100%); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .arcade-panel h2 { font-size: clamp(18px, 4vw, 26px); margin: 0; }
+  .arcade-panel button { min-height: 42px; padding: 9px 16px; font-size: 15px; }
+  .arcade-toolbar, .arcade-buttons, .arcade-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+  .arcade-panel select { background: #243955; color: white; border-radius: 8px; padding: 6px; max-width: 240px; }
+  .arcade-panel p { margin: 0; text-align: center; max-width: 850px; font-size: 14px; }
+  .arcade-panel canvas { width: min(900px, 100%, calc(49dvh * 900 / 550)); height: auto; flex: 0 0 auto; aspect-ratio: 900 / 550; touch-action: none; border: 2px solid #5ba8ff; border-radius: 18px; }
+  .arcade-panel canvas:focus-visible { outline: 3px solid #ffdc69; outline-offset: 2px; }
+  .arcade-controls { touch-action: none; padding-bottom: env(safe-area-inset-bottom); }
+  .arcade-controls button { min-width: 50px; background: #314e71; color: white; }
+  .arcade-panel [hidden] { display: none !important; }
+  .arcade-panel button:disabled { opacity: .45; }
+  @media (max-width: 600px) { .arcade-panel { padding-top: 8px; gap: 7px; } .arcade-panel .arcade-help { font-size: 12px; } }
 </style>
 </head>
 <body>
@@ -249,8 +285,8 @@
     <div class="card">
 
       <section class="screen" data-screen="home">
-        <h1>🎈 Не впусти кульку!</h1>
-        <p class="sub">Бий долонею знизу, щоб кулька не торкнулась підлоги.</p>
+        <h1>🎈 Shelter Games</h1>
+        <p class="sub">Обирай гру, збирай друзів і встановлюй рекорди.</p>
         <div class="stack">
           <button class="menu-btn" data-go="classic">
             <b>🎈 Класика</b><i>одному, вдвох або кімнатою на чотирьох</i>
@@ -261,6 +297,14 @@
           <button class="menu-btn green" data-go="team">
             <b>🤝 Тім-ап</b><i>кулька ходить по руках: тапнув — пасуй</i>
           </button>
+          <button class="menu-btn green" data-go="football">
+            <b>⚽ Футбол</b><i>вид зверху · прицілюйся й забивай · боти та кімнати</i>
+          </button>
+          <button class="menu-btn dark" id="btn-rough"><b>👾 Футбол без правил</b><i>піксельний матч · підніжки на F · без судді</i></button>
+          <button class="menu-btn blue" data-arcade="pong"><b>🏓 Пінг-понг</b><i>5 рівнів · переграй бота</i></button>
+          <button class="menu-btn" data-arcade="bricks"><b>🧱 Арканоїд</b><i>5 різних полів · 3 життя</i></button>
+          <button class="menu-btn green" data-arcade="stars"><b>⭐ Ловець зірок</b><i>5 рівнів · зірки та бомби</i></button>
+          <button class="menu-btn green" data-go="arcade"><b>🎮 Аркади та рівні</b><i>10 нових ігор · 65 рівнів у 13 аркадах</i></button>
           <button class="menu-btn basketball-card" data-go="hoops">
             <b>🏀 Баскетбол</b><i>кошики, кидки та команди 4 на 4</i>
           </button>
@@ -276,10 +320,21 @@
           <button class="menu-btn ghost" data-go="help">
             <b>📖 Як грати</b><i>правила, загрози й гарячі клавіші</i>
           </button>
+          <button class="menu-btn green" data-go="custom">
+            <b>🛠 Мої рівні</b><i>створи свої правила для будь-якої гри</i>
+          </button>
+          <button class="menu-btn ghost" data-go="achievements">
+            <b>🏆 Ачівки</b><i>від першого тапу до перемоги над складним ботом</i>
+          </button>
         </div>
         <div class="wallet-line"><b data-w="coins">🪙 0</b> · <b data-w="skulls">☠ 0</b> · <b data-w="tokens">🤝 0</b></div>
       </section>
 
+      <section class="screen" data-screen="arcade" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🎮 Аркади та рівні</h2></div>
+        <p class="sub">13 ігор по 5 рівнів. Перемагай, відкривай наступні рівні та повертайся до улюблених — прогрес зберігається.</p>
+        <div id="arcade-games" class="stack"></div>
+      </section>
       <section class="screen" data-screen="classic" hidden>
         <div class="bar"><button class="back" data-go="home">←</button><h2>🎈 Класика</h2></div>
         <p class="sub">Перший рівень спокійний, а далі кожен додає нову загрозу:
@@ -343,6 +398,33 @@
             </div>
           </div>
           <div class="wallet-line"><b data-w="tokens">🤝 0</b> на командні переваги</div>
+        </div>
+      </section>
+
+      <section class="screen basketball-window" data-screen="football" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>⚽ Футбол</h2></div><p class="sub">Аути, кутові, удари від воріт, офсайд. F — підніжка: штрафний або пенальті, дві жовті — вилучення. Скорочений матч 4×4 до 5 голів.</p>
+        <p class="sub">Вид зверху · 4 на 4 · перші 5 голів — перемога!</p>
+        <p>Ти — футболіст із білим кільцем. Помаранчеві атакують праві ворота, сині — ліві. Підійди до м’яча, щоб забрати його. Можна відібрати м’яч у суперника.</p>
+        <p><b>WASD / стрілки</b> — біг. Без м’яча можна вести гравця мишкою або пальцем. З м’ячем — прицілюйся вказівником, <b>клік / пробіл</b> — удар. На телефоні наведи пальцем і відпусти, щоб ударити.</p>
+        <div class="stack">
+          <div class="basketball-option">
+            <h3>🤖 Матч із ботами</h3>
+            <p>Ти та 3 напарники проти 4 ботів. У кожної команди є воротар.</p>
+            <label class="bot-difficulty" for="football-difficulty">Складність суперників
+              <select id="football-difficulty"><option value="easy">Легка — повільні, часто промахуються</option><option value="medium" selected>Середня — збалансована гра</option><option value="hard">Складна — швидкі, точні, перехоплюють</option></select>
+            </label>
+            <p>Твої напарники завжди середнього рівня. Складність змінює лише команду суперників, включно з воротарем.</p>
+            <button id="btn-football-bot" class="green">На поле →</button>
+          </div>
+          <div class="basketball-option online-block">
+            <h3>👥 Кімната 4 на 4</h3>
+            <p>До 8 друзів за кодом. Гравці замінюють ботів, коли приєднуються.</p>
+            <label><input type="checkbox" id="football-room-bots" checked style="width:auto"> Заповнити вільні місця ботами</label>
+            <div class="stack">
+              <button id="btn-football-host" class="green">Створити кімнату</button>
+              <div class="row"><input id="room-football" maxlength="4" placeholder="КОД" aria-label="Код футбольної кімнати" autocomplete="off"><button id="btn-football-join" class="blue">Приєднатися</button></div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -438,6 +520,45 @@
         <p>Затисни мишку й рухай огляд. Коліщатко — масштаб, подвійний клік — весь майданчик. На сенсорі перетягуй пальцем.</p>
       </section>
 
+      <section class="screen" data-screen="custom" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🛠 Мої рівні</h2></div>
+        <p class="sub">Створи власний рівень для локальної гри. Збережи його в цьому браузері й грай знову!</p>
+        <label for="custom-saved">Збережені рівні</label>
+        <select id="custom-saved"></select>
+        <div class="row"><button id="custom-new" class="ghost">＋ Новий</button><button id="custom-delete" class="ghost" disabled>Видалити</button></div>
+        <p id="custom-status" role="status"></p>
+        <form id="custom-form">
+          <label>Назва рівня<input name="name" maxlength="50" required value="Мій рівень"></label>
+          <label>Гра<select name="mode"></select></label>
+          <div class="row">
+            <label><span id="custom-target-label">Влучань для проходження</span><input name="target" type="number" min="1" max="1000" step="1" required></label>
+            <label>Темп гри <output id="custom-pace-value"></output><input name="pace" type="range" min="0.5" max="1.5" step="0.1"></label>
+          </div>
+          <fieldset id="custom-balloon"><legend>Кулька</legend>
+            <div class="row"><label>Життя<input name="lives" type="number" min="1" max="10" required></label>
+            <label>Гравці<select name="players"><option value="1">Один</option><option value="2">Удвох на одному екрані</option></select></label></div>
+            <label><span><input name="hazards" type="checkbox" checked> Увімкнути звичайні загрози режиму</span></label>
+          </fieldset>
+          <fieldset id="custom-sport" hidden><legend>Команди та боти</legend>
+            <label>Гравців у кожній команді<select name="teamSize"><option value="1">1 на 1</option><option value="2">2 на 2</option><option value="3">3 на 3</option><option value="4">4 на 4</option></select></label>
+            <label>Складність суперників<select name="difficulty"><option value="easy">Легка</option><option value="medium">Середня</option><option value="hard">Складна</option></select></label>
+            <small>Ти керуєш першим гравцем. Решта — боти; твої напарники середнього рівня.</small>
+          </fieldset>
+          <label>Старт м’яча: <output id="custom-spawn-value"></output></label>
+          <canvas id="custom-preview" width="600" height="400" aria-label="Схема рівня. Натисни або перетягни, щоб вибрати старт м’яча."></canvas>
+          <small>Натисни на схему або перетягни м’яч. Можна також задати координати:</small>
+          <div class="row"><label>X<input name="spawnX" type="number" min="150" max="1050" required></label><label>Y<input name="spawnY" type="number" min="160" max="550" required></label></div>
+          <div class="row"><button id="custom-save" type="button" class="blue">Зберегти</button><button type="submit" class="green">▶ Грати</button></div>
+        </form>
+      </section>
+
+      <section class="screen" data-screen="achievements" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🏆 Ачівки</h2></div>
+        <p class="sub" id="achievement-count"></p>
+        <p class="sub">За кожну ачівку — монети на покупки в магазині! Нагорода нараховується автоматично один раз. Прогрес зберігається в цьому браузері; у грі вдвох він спільний.</p>
+        <div id="achievement-list"></div>
+      </section>
+
       <section class="screen" data-screen="shop" hidden>
         <div class="bar"><button class="back" data-go="home">←</button><h2>🛍 Магазин</h2></div>
         <div id="wallet" class="shop-wallet" aria-label="Твій гаманець">
@@ -467,7 +588,7 @@
 
       <section class="screen" data-screen="help" hidden>
         <div class="bar"><button class="back" data-go="home">←</button><h2>📖 Як грати</h2></div>
-        <p class="sub">Бий долонею знизу, щоб кулька не торкнулась підлоги. Веди мишкою або
+        <p class="sub">Обирай гру, збирай друзів і встановлюй рекорди. Веди мишкою або
           <b>WASD</b>; удвох за одним комп'ютером другий грає стрілками, на сенсорі — просто два пальці.</p>
         <p class="sub">Кожен рівень додає нову загрозу: шипи ⚠ (їх можна відбити рукою),
           чайку 🕊, їжачка 🦔, камінці 🪨 у хардкорі, пастки 🕸 🫧 у тім-апі.</p>
@@ -527,6 +648,7 @@
     </div>
   </div>
 
+  <div id="achievement-toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="/src/client/main.js"></script>
 </body>
 </html>

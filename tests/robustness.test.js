@@ -4,7 +4,7 @@ import { createWorld, addHand, step, setHandTarget } from '../src/shared/physics
 import { storage, savedNumber, savedSet } from '../src/client/storage.js';
 
 test('invalid targets and time steps cannot poison physics in any mode', () => {
-  for (const mode of ['normal', 'hardcore', 'team', 'basketball']) {
+  for (const mode of ['normal', 'hardcore', 'team', 'basketball', 'hoops', 'football']) {
     const w = createWorld(mode), h = addHand(w, 'p0', 0);
     const target = [h.tx, h.ty];
     for (const x of [undefined, null, {}, '100', NaN, Infinity]) setHandTarget(w, h.id, x, 10);

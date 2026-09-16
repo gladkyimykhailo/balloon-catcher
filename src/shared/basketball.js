@@ -50,7 +50,25 @@ export function basketballHand(x, y, tx, ty, dt, player, speed = BASKETBALL.spee
   ty = clamp(Number.isFinite(ty) ? ty : y, CEIL_Y + r, FLOOR_Y - r);
   const dx = tx - x, dy = ty - y, d = Math.hypot(dx, dy);
   const k = d ? Math.min(1, speed * dt / d) : 0;
-  return { x: clamp(x + dx * k, lo, hi), y: clamp(y + dy * k, CEIL_Y + r, FLOOR_Y - r) };
+  let nx = clamp(x + dx * k, lo, hi), ny = clamp(y + dy * k, CEIL_Y + r, FLOOR_Y - r);
+  if (fullCourt) for (const cx of [HOOPS.left, HOOPS.right]) {
+    const left = cx - HOOPS.half - r, right = cx + HOOPS.half + r;
+    const top = HOOPS.y - 7 - r, bottom = HOOPS.y + 65 + r;
+    let enter = 0, leave = 1, axis = null;
+    for (const [start, delta, min, max, name] of [[x,nx-x,left,right,'x'],[y,ny-y,top,bottom,'y']]) {
+      if (Math.abs(delta)<1e-9) { if (start<=min || start>=max) leave=-1; continue; }
+      const a=(min-start)/delta, b=(max-start)/delta, near=Math.min(a,b), far=Math.max(a,b);
+      if (near>=enter) { enter=near; axis=name; }
+      leave=Math.min(leave,far);
+    }
+    if (enter<=leave && leave>=0 && enter<=1 && axis) {
+      const t=Math.max(0,enter-0.00001); nx=x+(nx-x)*t; ny=y+(ny-y)*t;
+    } else if (nx>left && nx<right && ny>top && ny<bottom) {
+      const edges=[[nx-left,'x',left],[right-nx,'x',right],[ny-top,'y',top],[bottom-ny,'y',bottom]].sort((a,b)=>a[0]-b[0]);
+      if(edges[0][1]==='x') nx=edges[0][2]; else ny=edges[0][2];
+    }
+  }
+  return { x: nx, y: ny };
 }
 
 export function placeBasketballHand(h) {
@@ -96,6 +114,15 @@ function syncPoints(w) {
 
 function botTarget(w, h, dt) {
   const b = w.basketball.ball;
+  // Give our team's shot room to reach the basket, including between reactions.
+  // Once it misses below the rim, chase the rebound again.
+  if (w.mode === 'hoops' && w.basketball.lastShot === basketballTeam(h.player)
+      && (b.vy < 0 || b.y <= HOOPS.y)) {
+    h.tx = h.x;
+    h.ty = FLOOR_Y - BASKETBALL.handRadius;
+    h.think = 0;
+    return;
+  }
   h.think = (h.think ?? 0) - dt;
   if (h.think > 0) return;
   h.think = botSettings(h).reaction;

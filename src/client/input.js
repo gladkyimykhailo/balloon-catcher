@@ -20,6 +20,7 @@ export class Input {
       { x: WORLD.w * 0.65, y: WORLD.h - 170, kx: 0, ky: 0, used: false },
     ];
     this.keys = new Set();
+    this.footballKick = false;
     this._bind();
   }
 
@@ -51,7 +52,10 @@ export class Input {
       if (e.pointerType === 'mouse' && !this.pointers.has(e.pointerId)) claim(e.pointerId);
       move(e);
     });
-    const drop = (e) => { this.pointers.delete(e.pointerId); };
+    const drop = (e) => {
+      if (e.type === 'pointerup' && this.pointers.has(e.pointerId)) this.footballKick = true;
+      this.pointers.delete(e.pointerId);
+    };
     el.addEventListener('pointerup', drop);
     el.addEventListener('pointercancel', drop);
     el.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'mouse') drop(e); });
@@ -66,11 +70,13 @@ export class Input {
 
     window.addEventListener('keydown', (e) => {
       if (e.repeat || typing(e)) return;
+      if (e.code === 'Space') this.footballKick = true;
+      if (e.code === 'KeyF') this.footballTrip = true;
       this.keys.add(e.code);
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => { this.keys.delete(e.code); });
-    window.addEventListener('blur', () => { this.keys.clear(); this.pointers.clear(); });
+    window.addEventListener('blur', () => { this.keys.clear(); this.pointers.clear(); this.footballKick = false; this.footballTrip = false; });
   }
 
   update(dt) {
@@ -104,7 +110,21 @@ export class Input {
     if (slots) this.slots = slots;
     this.pointers.clear();
     this.keys.clear();
+    this.footballKick = false; this.footballTrip = false;
     for (const t of this.targets) { t.kx = 0; t.ky = 0; }
+  }
+
+  footballControl(player, owner) {
+    const t = this.targets[0];
+    const dx = Number(this.keys.has('KeyD') || this.keys.has('ArrowRight')) - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft'));
+    const dy = Number(this.keys.has('KeyS') || this.keys.has('ArrowDown')) - Number(this.keys.has('KeyW') || this.keys.has('ArrowUp'));
+    const keyboard = dx || dy;
+    const kick = this.footballKick, trip = !!this.footballTrip;
+    this.footballTrip = false;
+    this.footballKick = false;
+    return { x: keyboard ? player.x + dx * 70 : owner ? player.x : t.x,
+      y: keyboard ? player.y + dy * 70 : owner ? player.y : t.y,
+      aimX: t.x, aimY: t.y, kick, trip };
   }
 
   target(slot) { return this.targets[slot]; }

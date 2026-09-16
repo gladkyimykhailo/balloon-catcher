@@ -1,4 +1,10 @@
+import { openArcade } from './arcade.js';
+import { ARCADE_GAMES } from '../shared/arcade.js';
+import { initCustomLevelEditor } from './custom-level-editor.js';
+import { normalizeCustomLevel, isSport } from '../shared/custom-level.js';
+import { footballSpawn, setFootballInput } from '../shared/football.js';
 import { storage, savedNumber, savedSet } from './storage.js';
+import { createAchievements } from './achievements.js';
 import { BASKETBALL, basketballHand, basketballTeam, basketballRoster, basketballSpawn } from '../shared/basketball.js';
 import { Renderer } from './renderer.js';
 import { Input } from './input.js';
@@ -8,6 +14,37 @@ import { createWorld, step, addHand, setHandTarget, restart, levelInfo, advanceH
 import { WORLD, RULES, HARDCORE, TEAM, SKUNK, PLAYER_COLORS, PLAYER_COLOR_NAMES, PLAYER_NAMES, MEDKIT, RAGE, COIN, SKINS, GLOVES, CHARACTERS, PERKS, BUFFS, handKit, biomeAt, ladderAt, rulesFor, skullReward, perkMask } from '../shared/constants.js';
 
 const $ = (s) => document.querySelector(s);
+const achievementQueue = [];
+let achievementToastActive = false;
+const achievements = createAchievements(storage, achievement => {
+  addCoins(achievement.reward);
+  achievementQueue.push(achievement);
+  showAchievementToast();
+});
+
+function showAchievementToast() {
+  if (achievementToastActive || !achievementQueue.length) return;
+  achievementToastActive = true;
+  const a = achievementQueue.shift(), toast = $('#achievement-toast');
+  toast.textContent = `${a.icon} ${a.title} — +${a.reward} 🪙`;
+  toast.hidden = false;
+  setTimeout(() => {
+    toast.hidden = true;
+    achievementToastActive = false;
+    showAchievementToast();
+  }, 3500);
+}
+
+function renderAchievements() {
+  const entries = achievements.entries();
+  $('#achievement-count').textContent = `${entries.filter(a => a.unlocked).length} / ${entries.length} відкрито`;
+  $('#achievement-list').innerHTML = entries.map(a => `
+    <article class="achievement ${a.unlocked ? 'unlocked' : ''}">
+      <b>${a.icon} ${a.title}</b><p>${a.note}</p>
+      <span>${a.unlocked ? '✓ Відкрито' : `${a.progress} / ${a.goal}`} · 🪙 ${a.unlocked ? 'Отримано' : 'Нагорода:'} ${a.reward}</span>
+      <progress aria-label="${a.title}" value="${a.progress}" max="${a.goal}"></progress>
+    </article>`).join('');
+}
 
 const game = {
   mode: null,        // як грають: 'solo' | 'local2' | 'online'
@@ -45,6 +82,9 @@ function setKind(k) {
 async function boot() {
   renderer = await new Renderer().init($('#stage'));
   input = new Input(renderer, { slots: 2 });
+  initCustomLevelEditor($('[data-screen="custom"]'), storage, level => {
+    startLocal(isSport(level.mode) ? 1 : level.players, level.mode, level);
+  });
 
   $('#btn-solo').onclick = () => startLocal(1);
   $('#btn-local2').onclick = () => startLocal(2);
@@ -52,6 +92,20 @@ async function boot() {
   $('#btn-hc2').onclick = () => startLocal(2, 'hardcore');
   $('#btn-watch').onclick = () => watchRoom();
   $('#room-watch').addEventListener('keydown', e => { if (e.key === 'Enter') watchRoom(); });
+  const arcadeMenu = document.querySelector('#arcade-games');
+  for (const [kind, info] of Object.entries(ARCADE_GAMES)) {
+    const button = document.createElement('button');
+    button.className = 'menu-btn blue'; button.dataset.arcade = kind;
+    const title = document.createElement('b'); title.textContent = info.name;
+    const note = document.createElement('i'); note.textContent = '5 рівнів · ' + info.help;
+    button.append(title, note); arcadeMenu.append(button);
+  }
+  for (const b of document.querySelectorAll('[data-arcade]')) b.onclick = () => openArcade(b.dataset.arcade);
+  $('#btn-rough').onclick = () => { startLocal(1, 'football'); game.world.football.noRules = true; };
+  const trip = document.createElement('button'); trip.id = 'btn-trip'; trip.textContent = 'Підніжка · F'; trip.style.cssText = 'position:fixed;right:20px;bottom:80px;z-index:20'; trip.hidden = true; document.body.append(trip);
+  trip.onpointerdown = e => { e.preventDefault(); input.footballTrip = true; };
+  $('#btn-football-bot').onclick = () => startLocal(1, 'football');
+  wireRoom('#btn-football-host', '#btn-football-join', '#room-football', 'football');
   $('#btn-hoops-bot').onclick = () => startLocal(1, 'hoops');
   wireRoom('#btn-hoops-host', '#btn-hoops-join', '#room-hoops', 'hoops');
   $('#btn-basket-bot').onclick = () => startLocal(1, 'basketball');
@@ -93,6 +147,8 @@ async function boot() {
   buildPicker('char');
   buildPicker('perk');
   showCoins();
+
+  achievements.claimRewards();
 
   $('#btn-med').onclick = (e) => { e.preventDefault(); $('#btn-med').blur(); doMedkit(); };
   $('#btn-rage').onclick = (e) => { e.preventDefault(); $('#btn-rage').blur(); doRage(); };
@@ -147,7 +203,7 @@ async function boot() {
   else if (mode === 'hardcore') startLocal(1, 'hardcore');
   else if (mode === 'hardcore2') startLocal(2, 'hardcore');
   else if (mode === 'team') startLocal(2, 'team');
-  else if (['basketball', 'hoops'].includes(mode)) startLocal(1, mode);
+  else if (['basketball', 'hoops', 'football'].includes(mode)) startLocal(1, mode);
   // ?host=hardcore — одразу створити кімнату потрібного режиму, не заходячи в меню.
   else if (q.get('host')) { await finding; showScreen(screenOf(kindOf(q.get('host')))); startOnline('', kindOf(q.get('host'))); }
 
@@ -404,7 +460,7 @@ function syncFullBtn() {
   b.title = inFullscreen() ? 'Вийти з повного екрана' : 'На весь екран';
 }
 
-function startLocal(players, kind = 'normal') {
+function startLocal(players, kind = 'normal', custom = null) {
   renderer.setSpectating(false);
   cancelConnection();
   game.net?.close();
@@ -412,26 +468,47 @@ function startLocal(players, kind = 'normal') {
   if (isTouch()) enterFullscreen();
   setKind(kind);
   game.mode = players === 1 ? 'solo' : 'local2';
-  game.world = createWorld(kind);
+  if (custom) custom = normalizeCustomLevel({ ...custom, mode: kind });
+  game.world = createWorld(kind, custom);
   setSkin(game.world, skin);
   game.over = false;
   // Обидва локальні гравці грають вибраним: пікер у меню один на всіх, і перки
   // за одним комп'ютером теж спільні — гаманець же один.
   const mask = perkMask(wallet.owned.perk);
   for (let i = 0; i < players; i++) addHand(game.world, 'h' + i, i, glove, char, mask);
-  if (['basketball', 'hoops'].includes(kind) && players === 1) {
+  if (custom && isSport(kind)) {
+    for (let side = 1; side < custom.teamSize * 2; side++) {
+      const bot = addHand(game.world, 'bot' + side, side);
+      bot.bot = true;
+      bot.botDifficulty = side % 2 ? custom.difficulty : 'medium';
+    }
+    restart(game.world);
+  } else if (['basketball', 'hoops'].includes(kind) && players === 1) {
     const bot = addHand(game.world, 'bot', 1);
     bot.bot = true;
     bot.botDifficulty = $(kind === 'hoops' ? '#hoops-difficulty' : '#bot-difficulty').value;
   }
+  if (kind === 'football' && !custom) {
+    for (let side = 1; side < 8; side++) {
+      const bot = addHand(game.world, 'bot' + side, side);
+      bot.bot = true;
+      bot.botDifficulty = side % 2 === 1 ? $('#football-difficulty').value : 'medium';
+    }
+    restart(game.world);
+  }
   input.reset(players);
+  if (kind === 'football') {
+    input.targets[0].x = game.world.hands[0].x;
+    input.targets[0].y = game.world.hands[0].y;
+  }
   const how = players === 1 ? 'Веди мишкою або WASD' : 'Гравець 1 — WASD, Гравець 2 — стрілки. На сенсорі — два пальці';
-  const tip = kind === 'hoops' ? '🏀 Закинь м’яч у кошик суперника! +2 очки за кошик, матч до 10. '
+  const tip = kind === 'football' ? '⚽ WASD / стрілки — рух. З м’ячем: прицілься мишкою, клік або пробіл — удар. На телефоні наведи й відпусти палець. '
+    : kind === 'hoops' ? '🏀 Закинь м’яч у кошик суперника! +2 очки за кошик, матч до 10. '
     : kind === 'basketball' ? '🏐 Перекинь м’яч через сітку на підлогу суперника. До ' + BASKETBALL.target + ' очок. '
     : kind === 'hardcore' ? '☠ Хардкор: камінці з неба, шипи щорівня, два серця. '
     : kind === 'team' ? '🤝 Тім-ап: тапнув — пасуй! Двічі поспіль не можна. '
     : '';
-  showHud(tip + how);
+  showHud(custom ? `🛠 ${custom.name} · ціль: ${custom.target} · темп ${custom.pace}×. ` + (kind === 'football' ? tip : how) : tip + how);
   sfx.start();
 }
 
@@ -454,12 +531,12 @@ function screenOf(kind) {
 
 /** Поле коду того екрана меню, що відповідає режиму. */
 function codeField(kind) {
-  return { hardcore: '#room-hc', team: '#room-team', basketball: '#room-basket', hoops: '#room-hoops' }[kind] || '#room-input';
+  return { hardcore: '#room-hc', team: '#room-team', basketball: '#room-basket', hoops: '#room-hoops', football: '#room-football' }[kind] || '#room-input';
 }
 
 /** Режим світу з рядка: усе незнайоме — звичайна гра. */
 function kindOf(s) {
-  return ['hardcore', 'team', 'basketball', 'hoops'].includes(s) ? s : 'normal';
+  return ['hardcore', 'team', 'basketball', 'hoops', 'football'].includes(s) ? s : 'normal';
 }
 
 /**
@@ -480,7 +557,7 @@ function wireRoom(hostSel, joinSel, inputSel, kind) {
     if (!/^[A-Z0-9]{4}$/.test(code)) { setNote('Введи код кімнати з 4 символів', true); return; }
     startOnline(code, kind);
   };
-  $(hostSel).onclick = () => startOnline('', kind, { bots: kind === 'hoops' && $('#hoops-room-bots').checked });
+  $(hostSel).onclick = () => startOnline('', kind, { bots: ['hoops', 'football'].includes(kind) && $(`#${kind}-room-bots`).checked });
   $(joinSel).onclick = join;
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 }
@@ -551,12 +628,13 @@ async function startOnline(room, kind = 'normal', { quiet = false, refreshed = f
   game.world = null;
   game.over = false;
   input.reset(1);
-  game.ghost = ['basketball', 'hoops'].includes(game.kind) ? basketballSpawn(net.side) : { x: WORLD.w / 2, y: WORLD.h - 180 };
-  if (['basketball', 'hoops'].includes(game.kind)) { input.targets[0].x = game.ghost.x; input.targets[0].y = game.ghost.y; }
+  game.ghost = game.kind === 'football' ? footballSpawn(net.side) : ['basketball', 'hoops'].includes(game.kind) ? basketballSpawn(net.side) : { x: WORLD.w / 2, y: WORLD.h - 180 };
+  if (['basketball', 'hoops', 'football'].includes(game.kind)) { input.targets[0].x = game.ghost.x; input.targets[0].y = game.ghost.y; }
   $('#room-code').textContent = net.room;
   $('#room-badge').hidden = false;
   $('#peer-info').textContent = peerLabel(net.peers, net.maxPlayers, net.mode, net.sides);
   const who = net.spectator ? '👁 Спостерігач. Перетягуй мишкою, коліщатко — масштаб, подвійний клік — весь майданчик'
+    : game.kind === 'football' ? '⚽ Твоя команда — ' + (net.side % 2 ? 'синя' : 'помаранчева') + '. WASD — рух, мишка — приціл, клік / пробіл — удар'
     : ['basketball', 'hoops'].includes(game.kind) ? (game.kind === 'hoops' ? '🏀' : '🏐') + ' Твоя команда — ' + (basketballTeam(net.side) === 0 ? 'помаранчева, ліворуч' : 'синя, праворуч') + '. Матч до ' + (game.kind === 'hoops' ? 10 : BASKETBALL.target) + ' очок'
     : game.hardcore
     ? '☠ Хардкор! Ти — ' + CHARACTERS[char].emoji + ' ' + CHARACTERS[char].name + ' у ' + PLAYER_COLOR_NAMES[net.side] + 'му нашийнику'
@@ -574,7 +652,7 @@ async function startOnline(room, kind = 'normal', { quiet = false, refreshed = f
   // Просив один режим, а кімната виявилась іншою — про це треба сказати прямо,
   // інакше гравець довго не розумів би, чому нема камінців (чи пасів).
   if (!net.spectator && kind !== net.mode) {
-    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝', basketball: 'Ця кімната — Волейбалл 🏐', hoops: 'Ця кімната — Баскетбол 🏀' }[net.mode]
+    setNote({ hardcore: 'Ця кімната хардкорна ☠', team: 'Ця кімната — тім-ап 🤝', basketball: 'Ця кімната — Волейбалл 🏐', hoops: 'Ця кімната — Баскетбол 🏀', football: 'Ця кімната — Футбол ⚽' }[net.mode]
       || 'Ця кімната звичайна', false);
   }
   sfx.start();
@@ -642,7 +720,7 @@ async function findSharedServer() {
 
 /** «Чекаємо…» / «Граєте втрьох» / «Кімната повна» — одним рядком. */
 function peerLabel(n, max, mode, sides = []) {
-  if (['basketball', 'hoops'].includes(mode)) {
+  if (['basketball', 'hoops', 'football'].includes(mode)) {
     const counts = basketballRoster(sides);
     return '🟠 ' + counts[0] + '/' + BASKETBALL.teamSize + ' · 🔵 ' + counts[1] + '/' + BASKETBALL.teamSize
       + (counts.some(count => count === 0) ? ' · Чекаємо на суперників…' : ' · ' + n + '/' + max + ' гравців');
@@ -659,6 +737,7 @@ function peerLabel(n, max, mode, sides = []) {
  * середини.
  */
 function showScreen(name) {
+  if (name === 'achievements') renderAchievements();
   for (const s of document.querySelectorAll('#menu .screen')) s.hidden = s.dataset.screen !== name;
   $('#menu .card').scrollTop = 0;
   setNote('', false);
@@ -667,7 +746,7 @@ function showScreen(name) {
 function toMenu() {
   renderer.setSpectating(false);
   cancelConnection();
-  showScreen('home');
+  showScreen(game.world?.custom ? 'custom' : 'home');
   game.net?.close();
   game.net = null;
   game.world = null;
@@ -780,8 +859,8 @@ function showHud(tip) {
   // дитячій грі не світились два незрозумілі рахунки.
   $('#skulls-hud').hidden = !!game.net?.spectator || !game.hardcore;
   $('#tokens-hud').hidden = !!game.net?.spectator || !game.team;
-  $('#med').hidden = !!game.net?.spectator || ['basketball', 'hoops'].includes(game.kind);
-  $('#coins-hud').hidden = !!game.net?.spectator || ['basketball', 'hoops'].includes(game.kind);
+  $('#med').hidden = !!game.net?.spectator || ['basketball', 'hoops', 'football'].includes(game.kind);
+  $('#coins-hud').hidden = !!game.net?.spectator || ['basketball', 'hoops', 'football'].includes(game.kind);
   $('#menu').hidden = true;
   $('#gameover').hidden = true;
   $('#hud').hidden = false;
@@ -800,7 +879,8 @@ function setNote(text, isError) {
 // ------------------------------------------------------------------ кадр
 
 function frame(dt) {
-  input.update(dt);
+  $('#btn-trip').hidden = !game.mode || game.kind !== 'football' || game.over || !!game.net?.spectator;
+  if (game.kind !== 'football') input.update(dt);
   if (banner.t > 0) banner.t -= dt;
 
   let view = null;
@@ -835,19 +915,22 @@ function frameLocal(dt) {
   for (let i = 0; i < w.hands.length; i++) {
     if (w.hands[i].bot) continue;
     const t = input.target(i);
-    setHandTarget(w, w.hands[i].id, t.x, t.y);
+    if (w.football) setFootballInput(w, w.hands[i].id, input.footballControl(w.hands[i], w.football.owner === w.hands[i].id));
+    else setHandTarget(w, w.hands[i].id, t.x, t.y);
   }
   step(w, dt);
   for (const e of w.events) onWorldEvent(e);
 
-  if (w.state === 'over' && !game.over) endGame(w.score, w.basketball);
+  if (w.state === 'over' && !game.over) endGame(w.score, w.basketball ?? w.football);
 
   return {
     points: w.balloon.pts,
     basketball: w.basketball,
+    football: w.football,
+    aim: { x: input.target(0).x, y: input.target(0).y },
     hands: w.hands.map((h) => ({
-      id: h.id, player: h.player, bot: !!h.bot, x: h.x, y: h.y, flash: h.flash, slow: h.slow,
-      glove: h.glove, char: h.char, rage: h.rage, rages: h.rages, dirty: h.dirty, self: false,
+      id: h.id, player: h.player, bot: !!h.bot, x: h.x, y: h.y, flash: h.flash, slow: h.slow, stun: h.stun, cards: h.cards,
+      glove: h.glove, char: h.char, rage: h.rage, rages: h.rages, dirty: h.dirty, self: w.mode === 'football' && !h.bot,
       // Правило черги рахуємо тут, щоб малювальник просто малював привида,
       // а не переказував правила гри своїми словами.
       lives: h.lives, out: h.out, web: h.web, shield: h.shield,
@@ -857,7 +940,7 @@ function frameLocal(dt) {
     })),
     score: w.score,
     lives: w.lives,
-    maxLives: rulesFor(w.mode).lives,
+    maxLives: w.custom?.lives ?? rulesFor(w.mode).lives,
     state: w.state,
     gull: w.gull,
     spikes: w.spikes.map((s) => ({ id: s.id, x: s.x, y: s.y, flying: s.phase !== 'warn', dead: s.phase === 'fall' })),
@@ -874,7 +957,7 @@ function frameLocal(dt) {
     team: w.team,
     combo: w.combo,
     buff: w.buff,
-    level: levelInfo(w.score, w.mode),
+    level: w.custom && !isSport(w.mode) ? { level: w.level, progress: w.score, target: w.custom.target } : levelInfo(w.score, w.mode),
     // Події гри передаємо звуком та ефектами, без спливного тексту.
     message: '',
   };
@@ -882,7 +965,7 @@ function frameLocal(dt) {
 
 function frameOnline(dt) {
   const t = input.target(0);
-  game.net.sendInput(t.x, t.y);
+  if (game.kind !== 'football') game.net.sendInput(t.x, t.y);
 
   // Свою долоню малюємо локально тим самим кроком, що й сервер: так вона
   // слухається миттєво, але не "стрибає" відносно серверної позиції. Штраф за
@@ -895,9 +978,13 @@ function frameOnline(dt) {
   const mine = snap.hands.find((h) => h.id === myId);
   // Кит потрібен і тут: пацюк ходить за курсором помітно швидше, і без цього
   // локальна рука розходилась би з серверною рівно на цю різницю.
+  if (snap.football && mine && !game.net.spectator) {
+    const controls = input.footballControl(mine, snap.football.owner === mine.id);
+    game.net.sendInput(controls.x, controls.y, controls);
+  }
   const kit = handKit(snap.mode, mine?.glove ?? 0, mine?.char ?? 0);
   if (snap.team && snap.buff.speed > 0) kit.speedMul *= BUFFS[0].speedMul;
-  const g = game.net.spectator || (snap.team && (mine?.web > 0 || mine?.out)) || (snap.basketball && snap.state === 'waiting')
+  const g = !!snap.football || game.net.spectator || (snap.team && (mine?.web > 0 || mine?.out)) || (snap.basketball && snap.state === 'waiting')
     ? { x: mine?.x ?? game.ghost.x, y: mine?.y ?? game.ghost.y }
     : ['basketball', 'hoops'].includes(game.kind)
     ? basketballHand(game.ghost.x, game.ghost.y, t.x, t.y, dt, game.net.side, BASKETBALL.speed, game.kind === 'hoops')
@@ -909,12 +996,14 @@ function frameOnline(dt) {
       ? { ...h, x: game.ghost.x, y: game.ghost.y, player: game.net.side, self: true }
       : { ...h, self: false });
 
-  if (!game.net.spectator && snap.state === 'over' && !game.over) endGame(snap.score, snap.basketball);
+  if (!game.net.spectator && snap.state === 'over' && !game.over) endGame(snap.score, snap.basketball ?? snap.football);
   if (snap.state !== 'over' && game.over) { game.over = false; $('#gameover').hidden = true; }
 
   return {
     points: snap.points,
     basketball: snap.basketball,
+    football: snap.football,
+    aim: { x: t.x, y: t.y },
     hands,
     score: snap.score,
     lives: snap.lives,
@@ -936,7 +1025,7 @@ function frameOnline(dt) {
     combo: snap.combo,
     buff: snap.buff,
     level: levelInfo(snap.score, snap.mode),
-    message: game.net.spectator && snap.state === 'over' ? 'Матч завершено · чекаємо на наступну гру' : snap.state === 'waiting' ? (snap.basketball ? 'Чекаємо на команду суперників…' : 'Чекаємо на друзів…') : '',
+    message: game.net.spectator && snap.state === 'over' ? 'Матч завершено · чекаємо на наступну гру' : snap.state === 'waiting' ? ((snap.basketball || snap.football) ? 'Чекаємо на команду суперників…' : 'Чекаємо на друзів…') : '',
   };
 }
 
@@ -981,7 +1070,12 @@ function idleView(dt) {
 
 function onWorldEvent(e) {
   if (game.net?.spectator) return;
-  if (e.type === 'basketHit') {
+  achievements.event(e, { mode: game.mode, kind: game.kind, side: game.net?.side });
+  if (e.type === 'footballKick') {
+    sfx.hit(0.6);
+  } else if (e.type === 'footballGoal') {
+    sfx.level();
+  } else if (e.type === 'basketHit') {
     renderer.burst(e.x, e.y, PLAYER_COLORS[basketballTeam(e.player)], 0.5);
     sfx.hit(0.6);
   } else if (e.type === 'basketPoint') {
@@ -1162,7 +1256,14 @@ function onWorldEvent(e) {
 
 function endGame(score, basketball = null) {
   game.over = true;
-  $('#gameover-title').textContent = basketball ? (game.kind === 'hoops' ? '🏀' : '🏐') + ' Матч завершено!' : 'Кулька впала 😢';
+  if (basketball) achievements.finish({
+    mode: game.mode, kind: game.kind, spectator: game.net?.spectator,
+    winner: basketball.winner,
+    difficulty: game.world?.hands.find(h => h.bot)?.botDifficulty,
+  });
+  $('#gameover-title').textContent = basketball ? (game.kind === 'football' ? '⚽' : game.kind === 'hoops' ? '🏀' : '🏐') + ' Матч завершено!' : 'Кулька впала 😢';
+  if (game.world?.custom && !basketball) $('#gameover-title').textContent = game.world.customWon
+    ? '🏆 Рівень пройдено: ' + game.world.custom.name : '🛠 Спробуй ще: ' + game.world.custom.name;
   $('#classic-result').hidden = !!basketball;
   $('#basket-result').hidden = !basketball;
   if (basketball) {

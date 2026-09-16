@@ -1,3 +1,4 @@
+import { setFootballInput } from '../src/shared/football.js';
 import { BASKETBALL, basketballRoster, basketballSeat } from '../src/shared/basketball.js';
 // Сервер мультиплеєра + роздача зібраного клієнта.
 //
@@ -144,7 +145,7 @@ function snapshot(room) {
       // Правило черги рахує сервер: клієнт отримує готове «можеш / не можеш».
       h.lives, h.out ? 1 : 0, +h.web.toFixed(2), h.shield, w.team && !canTap(w, h) && !h.out && h.web <= 0 ? 1 : 0,
       maxLivesOf(w, h), +h.gloveOn.toFixed(2), h.gloves,
-      h.shell, h.player, h.bot ? 1 : 0,
+      h.shell, h.player, h.bot ? 1 : 0, h.cards ?? 0, h.stun ?? 0,
     ]),
     g: w.gull ? [Math.round(w.gull.x), Math.round(w.gull.y), w.gull.dir, +w.gull.flap.toFixed(2)] : null,
     df: +w.deflate.toFixed(2),
@@ -154,6 +155,7 @@ function snapshot(room) {
     // більше місця в снапшоті, ніж уся решта каменя.
     sn: w.stones.map((s) => [s.id, Math.round(s.x), Math.round(s.y), s.phase === 'fall' ? 1 : 0, s.dead ? 1 : 0, Math.round(s.spin * 100)]),
     md: w.mode,
+    ft: w.football ?? null,
     bk: w.basketball ? { kind: w.basketball.kind, target: w.basketball.target, score: w.basketball.score, winner: w.basketball.winner, serve: w.basketball.serve, round: w.basketball.round, angle: w.basketball.angle } : null,
     tp: w.traps.map((t) => [t.id, Math.round(t.x), Math.round(t.y), t.type === 'web' ? 1 : 0, Math.round(t.life * 10)]),
     hg: w.hogs.map((h) => [h.id, Math.round(h.x), Math.round(h.y), h.dir, Math.round(h.spin * 100), ['run', 'jump', 'leave'].indexOf(h.phase)]),
@@ -180,7 +182,7 @@ function broadcast(room, obj) {
 }
 
 function hasOpponents(room) {
-  return ['basketball', 'hoops'].includes(room.mode)
+  return ['basketball', 'hoops', 'football'].includes(room.mode)
     ? basketballRoster(room.world.hands.map(h => h.player)).every(n => n > 0)
     : room.clients.size >= 2;
 }
@@ -237,23 +239,23 @@ wss.on('connection', (ws) => {
           t: 'welcome', room: code, side: -1, spectator: true, mode: room.mode,
           sides: room.world.hands.map(h => h.player),
           maxLives: rulesFor(room.mode).lives,
-          maxPlayers: ['basketball', 'hoops'].includes(room.mode) ? 8 : MAX_PLAYERS,
+          maxPlayers: ['basketball', 'hoops', 'football'].includes(room.mode) ? 8 : MAX_PLAYERS,
         }));
         announce(room);
         return;
       }
       const newRoom = !rooms.has(code);
       const room = getRoom(code, m.mode || (m.hc ? 'hardcore' : 'normal'));
-      if (newRoom && room.mode === 'hoops' && m.bots === true) room.fillBots = true;
-      const maxPlayers = ['basketball', 'hoops'].includes(room.mode) ? BASKETBALL.teamSize * 2 : MAX_PLAYERS;
+      if (newRoom && ['hoops', 'football'].includes(room.mode) && m.bots === true) room.fillBots = true;
+      const maxPlayers = ['basketball', 'hoops', 'football'].includes(room.mode) ? BASKETBALL.teamSize * 2 : MAX_PLAYERS;
       if (room.clients.size >= maxPlayers) {
         ws.send(JSON.stringify({ t: 'error', msg: `У цій кімнаті вже ${maxPlayers} гравці` }));
         return;
       }
       // Basketball поповнює меншу команду; інші режими беруть перший вільний слот.
       const taken = new Set([...room.clients].map((c) => c.side));
-      let side = ['basketball', 'hoops'].includes(room.mode) ? basketballSeat(taken) : 0;
-      if (!['basketball', 'hoops'].includes(room.mode)) while (taken.has(side)) side++;
+      let side = ['basketball', 'hoops', 'football'].includes(room.mode) ? basketballSeat(taken) : 0;
+      if (!['basketball', 'hoops', 'football'].includes(room.mode)) while (taken.has(side)) side++;
       ws.side = side;
       ws.room = room;
       ws.handId = 'p' + ws.side;
@@ -264,7 +266,7 @@ wss.on('connection', (ws) => {
       // Basketball починається, коли є гравець у кожній команді; решта може доєднатись.
       if (hasOpponents(room) && room.world.paused) {
         room.world.paused = false;
-        if (!['basketball', 'hoops'].includes(room.mode)) restart(room.world);
+        if (!['basketball', 'hoops', 'football'].includes(room.mode)) restart(room.world);
       }
       ws.send(JSON.stringify({
         t: 'welcome', room: code, side: ws.side, mode: room.mode,
@@ -278,7 +280,8 @@ wss.on('connection', (ws) => {
     if (!ws.room || ws.spectator) return;
 
     if (m.t === 'input') {
-      setHandTarget(ws.room.world, ws.handId, m.x, m.y);
+      if (ws.room.mode === 'football') setFootballInput(ws.room.world, ws.handId, m);
+      else setHandTarget(ws.room.world, ws.handId, m.x, m.y);
     } else if (m.t === 'restart') {
       restart(ws.room.world);
       ws.room.pending.length = 0;

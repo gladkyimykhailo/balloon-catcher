@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import * as physics from '../src/shared/physics.js';
 import * as constants from '../src/shared/constants.js';
+import * as football from '../src/shared/football.js';
 import * as basketball from '../src/shared/basketball.js';
 import { Net } from '../src/client/net.js';
 
@@ -21,7 +22,7 @@ function server() {
   const httpServer = new EventEmitter();
   httpServer.listen = () => {};
   const app = vm.runInNewContext(source + '\n({ wss, rooms, snapshot, tickRoom, server });', {
-    ...physics, ...constants, ...basketball, fs, path, fileURLToPath, WebSocketServer,
+    ...physics, ...constants, ...basketball, ...football, fs, path, fileURLToPath, WebSocketServer,
     http: { createServer: handler => { httpServer.request = handler; return httpServer; } }, URL, console,
     process: { env: {}, exit: code => { throw Error('Unexpected exit ' + code); } },
     setInterval: () => 1, clearInterval: () => {},
@@ -250,4 +251,49 @@ test('bots continue playing when the last player leaves a spectator watching', (
   assert.equal(watch.room.world.paused, false);
   watch.emit('close');
   assert.equal(app.rooms.size, 0);
+});
+
+
+test('football rooms replace bots with friends and synchronize goals and possession', () => {
+  const app = server(), host = app.connect('', 'football', { bots: true });
+  const room = host.room;
+  assert.equal(room.world.mode, 'football');
+  assert.equal(room.world.paused, false);
+  assert.equal(room.world.hands.length, 8);
+  const peer = app.connect(room.code, 'normal');
+  assert.equal(peer.side, 1);
+  assert.equal(room.world.hands.filter(h => h.bot).length, 6);
+  const w = room.world, h = w.hands.find(h => h.id === host.handId);
+  w.football.owner = h.id;
+  host.emit('message', JSON.stringify({ t: 'input', x: h.x, y: h.y, aimX: h.x, aimY: 0, kick: true }));
+  physics.step(w, 1 / 60);
+  assert.ok(w.football.ball.vy < 0);
+  for (const p of w.hands) p.active = false;
+  w.football.owner = null;
+  Object.assign(w.football.ball, { x: 1150, y: 420, vx: 800, vy: 0 });
+  room.last -= 40;
+  app.tickRoom(room);
+  for (const ws of [host, peer]) {
+    const snap = ws.messages.findLast(m => m.t === 'snap');
+    assert.deepEqual(snap.ft.score, [1, 0]);
+    const net = new Net(); net.push(snap);
+    assert.equal(net.sample().mode, 'football');
+    assert.deepEqual(net.sample().football.score, [1, 0]);
+  }
+  peer.emit('close');
+  assert.equal(w.hands.filter(h => h.bot).length, 7);
+  host.emit('message', JSON.stringify({ t: 'restart' }));
+  assert.deepEqual(w.football.score, [0, 0]);
+});
+
+test('football rooms without bots wait for opponents; spectators cannot shoot', () => {
+  const app = server(), host = app.connect('', 'football');
+  assert.equal(host.room.world.paused, true);
+  const watcher = app.connect(host.room.code, 'football', { spectator: true });
+  watcher.emit('message', JSON.stringify({ t: 'input', x: 1000, y: 420, kick: true }));
+  assert.equal(host.room.world.hands.length, 1);
+  const peer = app.connect(host.room.code, 'football');
+  assert.equal(host.room.world.paused, false);
+  peer.emit('close');
+  assert.equal(host.room.world.paused, true);
 });

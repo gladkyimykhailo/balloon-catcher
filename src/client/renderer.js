@@ -1,3 +1,4 @@
+import { FootballView } from './football-view.js';
 import { SpectatorCamera } from './spectator-camera.js';
 import { BASKETBALL, HOOPS, basketballTeam, basketballRoster } from '../shared/basketball.js';
 import { Application, Container, FillGradient, Graphics, Text } from 'pixi.js';
@@ -63,6 +64,9 @@ export class Renderer {
     // оболонкою означало б втратити саме той кадр, у якому ще можна відвести.
     this.scene = new Container();
     this.stage.addChild(this.scene, this.hud);
+    this.footballView = new FootballView();
+    this.footballView.visible = false;
+    this.stage.addChild(this.footballView);
     this.scene.addChild(this.bg, this.clouds, this.weather, this.shadowG, this.trapsG, this.spikesG, this.poopsG, this.balloonG, this.shine, this.stonesG, this.hogsG, this.skunksG, this.gull, this.handLayer, this.gasG, this.fx);
 
     // Відблиск малюємо один раз в одиничних координатах і далі лише
@@ -538,6 +542,17 @@ export class Renderer {
   // -------------------------------------------------------------- кадр
 
   draw(view, dt) {
+    this.footballView.visible = !!view.football;
+    this.scene.visible = this.hud.visible = !view.football;
+    if (view.football) {
+      this.sceneTime += dt;
+      this.app.renderer.background.color = 0x123d2c;
+      this.stage.position.set(this.offX, this.offY);
+      this.camera.apply(this.footballView.pitch);
+      this.footballView.draw(view, this.sceneTime);
+      return;
+    }
+    if (this.biome) this.app.renderer.background.color = this.biome.sky[0];
     // Біом — чиста функція від рівня, тож клієнту досить рахунку зі снапшота.
     this.setBiome(view.basketball ? (view.basketball.kind === 'hoops' ? { ...COURT, id: 'hoops' } : COURT) : biomeAt(view.level?.level ?? 1));
     this.clouds.visible = !view.basketball;

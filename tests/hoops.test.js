@@ -133,18 +133,52 @@ test('both teams of bots repeatedly contest the ball throughout play', () => {
   assert.ok(hits[1] > 5);
 });
 
-test('all basketball bots keep following a released shot instead of waiting at spawn', () => {
+test('bots give friendly shots space while opponents keep chasing', () => {
   const w = createWorld('hoops');
   for (let side = 0; side < 8; side++) addHand(w, 'bot' + side, side).bot = true;
   w.basketball.lastShot = 0;
   Object.assign(w.basketball.ball, { x: 600, y: 250, vx: 200, vy: -100 });
   step(w, 1 / 120);
   for (const bot of w.hands) {
-    assert.ok(bot.tx > 550 && bot.tx < 660);
-    assert.equal(bot.ty, 318);
+    if (bot.player % 2 === 0) {
+      assert.equal(bot.tx, bot.x);
+      assert.equal(bot.ty, FLOOR_Y - B.handRadius);
+    } else {
+      assert.ok(bot.tx > 550 && bot.tx < 660);
+      assert.equal(bot.ty, 318);
+    }
     assert.ok(Math.hypot(bot.vx, bot.vy) > 0);
     assert.ok(Math.hypot(bot.vx, bot.vy) <= B.botSpeed + 1e-6);
   }
+});
+
+test('bots let their own shots score without hitting them again on every difficulty', () => {
+  for (const player of [0, 1]) for (const difficulty of ['easy', 'medium', 'hard']) {
+    const w = createWorld('hoops'), bot = addHand(w, 'bot', player);
+    bot.bot = true;
+    bot.botDifficulty = difficulty;
+    Object.assign(w.basketball.ball, { x: bot.x, y: bot.y - bot.r - B.radius + 1, vx: 0, vy: 200 });
+    let hits = 0;
+    for (let i = 0; i < 360 && w.state === 'playing'; i++) {
+      step(w, 1 / 120);
+      hits += w.events.filter(e => e.type === 'basketHit').length;
+    }
+    assert.equal(hits, 1, `${player}: ${difficulty}`);
+    assert.equal(w.basketball.score[player], 2, `${player}: ${difficulty}`);
+  }
+});
+
+test('a bot chases a missed friendly shot below the rim', () => {
+  const w = createWorld('hoops'), bot = addHand(w, 'bot', 1);
+  bot.bot = true;
+  w.basketball.lastShot = 1;
+  Object.assign(w.basketball.ball, { x: 600, y: HOOPS.y + 50, vx: 0, vy: 100 });
+  let hit = false;
+  for (let i = 0; i < 240 && !hit; i++) {
+    step(w, 1 / 120);
+    hit = w.events.some(e => e.type === 'basketHit');
+  }
+  assert.ok(hit);
 });
 
 test('a bot intercepts an already released shot instead of keeping away from it', () => {

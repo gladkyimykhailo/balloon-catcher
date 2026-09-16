@@ -101,9 +101,9 @@ export class Net {
     for (const e of snap.ev) this.onEvent({ type: e[0], x: e[1], y: e[2], player: e[3], power: e[4], level: e[5], spikes: !!e[6], healed: !!e[7] });
   }
 
-  sendInput(x, y) {
+  sendInput(x, y, football = {}) {
     if (!this.spectator && this.ws?.readyState === 1) {
-      this.ws.send(JSON.stringify({ t: 'input', x: Math.round(x), y: Math.round(y) }));
+      this.ws.send(JSON.stringify({ t: 'input', x: Math.round(x), y: Math.round(y), ...football }));
     }
   }
 
@@ -160,6 +160,7 @@ export class Net {
     }
     if (t >= this.buf[n - 1].local) { a = b = this.buf[n - 1]; }
 
+    if (b.ft && (a.ft?.round !== b.ft.round || a.st !== b.st || a.ft?.owner !== b.ft.owner)) a = b;
     if (b.bk && (a.bk?.round !== b.bk.round || a.st !== b.st)) a = b;
     const span = b.local - a.local;
     const k = span > 0 ? Math.max(0, Math.min(1, (t - a.local) / span)) : 1;
@@ -175,7 +176,7 @@ export class Net {
       return {
         id: hb[0], player: hb[19] ?? (Number(String(hb[0]).slice(1)) || 0), bot: hb[20] === 1,
         x: ha[1] + (hb[1] - ha[1]) * k, y: ha[2] + (hb[2] - ha[2]) * k,
-        flash: hb[3], slow: hb[4] ?? 0,
+        flash: hb[3], slow: hb[4] ?? 0, cards: hb[21] ?? 0, stun: hb[22] ?? 0,
         glove: hb[5] ?? 0, rage: hb[6] ?? 0, rages: hb[7] ?? 0, dirty: hb[8] === 1,
         char: hb[9] ?? 0,
         // Тім-ап: усе особисте. `locked` рахує сервер — правило черги живе там,
@@ -260,6 +261,9 @@ export class Net {
 
     return {
       points, hands, gull, spikes, poops, stones, traps, hogs, skunks, gas,
+      football: b.ft ? { ...b.ft, ball: { ...b.ft.ball,
+        x: (a.ft?.ball.x ?? b.ft.ball.x) + (b.ft.ball.x - (a.ft?.ball.x ?? b.ft.ball.x)) * k,
+        y: (a.ft?.ball.y ?? b.ft.ball.y) + (b.ft.ball.y - (a.ft?.ball.y ?? b.ft.ball.y)) * k } } : null,
       basketball: b.bk ?? null,
       deflate: b.df ?? 0,
       mode: b.md || 'normal', hardcore: b.md === 'hardcore', team: b.md === 'team',
