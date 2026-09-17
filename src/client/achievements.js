@@ -1,3 +1,5 @@
+import { ARCADE_GAMES } from '../shared/arcade.js';
+import { MAX_ARCADE_LEVEL } from '../shared/arcade-levels.js';
 const milestones = (stat, goals, icon, label, note, legacy = {}) => goals.map((goal, i) => ({
   id: legacy[goal] ?? `${stat}-${goal}`,
   title: stat === 'taps' && goal === 1 ? 'The First Tap' : `${goal} ${label}`,
@@ -6,6 +8,11 @@ const milestones = (stat, goals, icon, label, note, legacy = {}) => goals.map((g
 }));
 
 export const ACHIEVEMENTS = [
+  ...Object.entries(ARCADE_GAMES).flatMap(([kind, game]) => [
+    { id: `arcade-${kind}-first`, title: `${game.name} — перша перемога`, stat: `arcade-${kind}-wins`, goal: 1, icon: '🥉', reward: 25, note: 'Переможи на будь-якому рівні.' },
+    { id: `arcade-${kind}-ten`, title: `${game.name} — 10 перемог`, stat: `arcade-${kind}-wins`, goal: 10, icon: '🥈', reward: 100, note: 'Здобудь 10 перемог; прогрес накопичується.' },
+    { id: `arcade-${kind}-master`, title: `${game.name} — майстер`, stat: `arcade-${kind}-final`, goal: 1, icon: '🏆', reward: 150, note: 'Пройди п’ятий рівень або вище.' },
+  ]),
   ...milestones('taps', [1, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000],
     '👆', 'Taps', 'Влучання по кульці або м’ячу', { 1: 'first-tap', 25: 'warming-up', 100: 'tap-master', 1000: 'unstoppable' }),
   ...milestones('passes', [1, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
@@ -47,6 +54,11 @@ export function createAchievements(storage, onUnlock = () => {}) {
     claimRewards();
   }
   return {
+    arcadeFinish({kind, level, won}) {
+      if(!won || !Object.hasOwn(ARCADE_GAMES,kind) || !Number.isInteger(level) || level<1 || level>MAX_ARCADE_LEVEL)return;
+      add(`arcade-${kind}-wins`);
+      if(level>=5)add(`arcade-${kind}-final`);
+    },
     claimRewards,
     entries: () => ACHIEVEMENTS.map(a => ({ ...a, progress: Math.min(stats[a.stat], a.goal), unlocked: unlocked.has(a.id) })),
     event(e, context) {

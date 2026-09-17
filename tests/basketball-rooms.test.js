@@ -10,6 +10,7 @@ import * as constants from '../src/shared/constants.js';
 import * as football from '../src/shared/football.js';
 import * as basketball from '../src/shared/basketball.js';
 import { Net } from '../src/client/net.js';
+import { createFighterRooms } from '../server/fighter-rooms.js';
 
 // Run real server room handlers with an in-memory transport: no ports,
 // Cloudflare, or external service needed for authoritative multiplayer tests.
@@ -23,6 +24,7 @@ function server() {
   httpServer.listen = () => {};
   const app = vm.runInNewContext(source + '\n({ wss, rooms, snapshot, tickRoom, server });', {
     ...physics, ...constants, ...basketball, ...football, fs, path, fileURLToPath, WebSocketServer,
+    createFighterRooms: () => createFighterRooms({ schedule: () => 1, cancel: () => {} }),
     http: { createServer: handler => { httpServer.request = handler; return httpServer; } }, URL, console,
     process: { env: {}, exit: code => { throw Error('Unexpected exit ' + code); } },
     setInterval: () => 1, clearInterval: () => {},
@@ -31,7 +33,7 @@ function server() {
     const ws = new EventEmitter();
     ws.readyState = 1; ws.messages = [];
     ws.send = text => ws.messages.push(JSON.parse(text));
-    app.wss.emit('connection', ws);
+    app.wss.emit('connection', ws, { url: options.endpoint || '/' });
     ws.emit('message', JSON.stringify({ t: 'join', room, mode, ...options }));
     return ws;
   };
@@ -296,4 +298,18 @@ test('football rooms without bots wait for opponents; spectators cannot shoot', 
   assert.equal(host.room.world.paused, false);
   peer.emit('close');
   assert.equal(host.room.world.paused, true);
+});
+
+test('fighter endpoint uses its own authoritative rooms without touching ball-game rooms', () => {
+  const app = server(), ball = app.connect();
+  const a = app.connect('', 'fighter', { endpoint: '/fighter' });
+  const welcome = a.messages.find(m => m.t === 'welcome');
+  assert.equal(welcome.mode, 'fighter'); assert.equal(a.room, undefined);
+  const b = app.connect(welcome.room, 'fighter', { endpoint: '/fighter' });
+  assert.equal(b.fighterRoom, a.fighterRoom); assert.equal(b.side, 1);
+  a.emit('message', JSON.stringify({ t: 'ready' })); b.emit('message', JSON.stringify({ t: 'ready' }));
+  assert.equal(a.fighterRoom.playing, true);
+  assert.equal(b.messages.findLast(m => m.t === 'fighter-snap').state.multiplayer, true);
+  assert.equal(app.rooms.size, 1); assert.equal(ball.room.mode, 'basketball');
+  a.emit('close'); b.emit('close');
 });

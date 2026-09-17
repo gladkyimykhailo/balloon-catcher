@@ -73,9 +73,9 @@ test('damaged saved progress safely starts at zero', () => {
 });
 
 
-test('all 60 achievements have unique IDs and positive coin rewards', () => {
-  assert.equal(ACHIEVEMENTS.length, 60);
-  assert.equal(new Set(ACHIEVEMENTS.map(a => a.id)).size, 60);
+test('all 3129 achievements have unique IDs and positive coin rewards', () => {
+  assert.equal(ACHIEVEMENTS.length, 3129);
+  assert.equal(new Set(ACHIEVEMENTS.map(a => a.id)).size, 3129);
   assert.ok(ACHIEVEMENTS.every(a => Number.isSafeInteger(a.reward) && a.reward > 0));
   assert.deepEqual(ACHIEVEMENTS.filter(a => a.stat === 'taps').map(a => a.goal),
     [1, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]);
@@ -106,4 +106,34 @@ test('existing progress receives old and newly added rewards exactly once', () =
     ['first-tap', 'taps-10', 'warming-up', 'taps-50', 'tap-master', 'beat-hard-bot', 'beat-hard-bot-5']);
   assert.equal(paid.reduce((sum, a) => sum + a.reward, 0), 640);
   createAchievements(storage, () => assert.fail('Already paid')).claimRewards();
+});
+
+test('arcade achievements track each game independently and persist rewards', () => {
+  const { tracker, storage, earned } = setup();
+  tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: 1, won: false });
+  tracker.arcadeFinish({ kind: 'missing', level: 5, won: true });
+  tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: 21, won: true });
+  assert.equal(earned.length, 0);
+  for (let i = 0; i < 10; i++) tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: i === 9 ? 5 : 1, won: true });
+  assert.deepEqual(earned, ['arcade-discovery-arithmetic-0-expedition-first', 'arcade-discovery-arithmetic-0-expedition-ten', 'arcade-discovery-arithmetic-0-expedition-master']);
+  assert.equal(entry(tracker, 'arcade-stars-first').progress, 0);
+  const reloaded = createAchievements(storage, () => assert.fail('Duplicate arcade reward'));
+  reloaded.claimRewards();
+  reloaded.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: 5, won: true });
+  assert.equal(entry(reloaded, 'arcade-discovery-arithmetic-0-expedition-master').unlocked, true);
+});
+
+test('every new independent game awards its own first win and final-level trophy', () => {
+  const { tracker, earned, storage } = setup();
+  for (const kind of ['fighter', 'sokoban', 'mines', 'sliding', 'connect', 'lights', 'stack', 'merge', 'sequence', 'flood']) {
+    tracker.arcadeFinish({ kind, level: 1, won: false });
+    assert.equal(entry(tracker, `arcade-${kind}-first`).unlocked, false);
+    tracker.arcadeFinish({ kind, level: 1, won: true });
+    tracker.arcadeFinish({ kind, level: 5, won: true });
+    assert.equal(entry(tracker, `arcade-${kind}-first`).unlocked, true);
+    assert.equal(entry(tracker, `arcade-${kind}-master`).unlocked, true);
+    assert.equal(entry(tracker, `arcade-${kind}-ten`).progress, 2);
+  }
+  assert.equal(earned.length, 20);
+  createAchievements(storage, () => assert.fail('Repeated new-game reward')).claimRewards();
 });

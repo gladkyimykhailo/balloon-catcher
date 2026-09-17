@@ -1,5 +1,6 @@
 import { openArcade } from './arcade.js';
-import { ARCADE_GAMES } from '../shared/arcade.js';
+import { openFighterMultiplayer } from './fighter-multiplayer.js';
+import { initArcadeCatalog, openArcadeOptions } from './anthology/menu.js';
 import { initCustomLevelEditor } from './custom-level-editor.js';
 import { normalizeCustomLevel, isSport } from '../shared/custom-level.js';
 import { footballSpawn, setFootballInput } from '../shared/football.js';
@@ -35,10 +36,16 @@ function showAchievementToast() {
   }, 3500);
 }
 
-function renderAchievements() {
+let visibleAchievements = 48;
+function renderAchievements(reset = true) {
+  if (reset) visibleAchievements = 48;
   const entries = achievements.entries();
   $('#achievement-count').textContent = `${entries.filter(a => a.unlocked).length} / ${entries.length} відкрито`;
-  $('#achievement-list').innerHTML = entries.map(a => `
+  const query = $('#achievement-search').value.trim().toLocaleLowerCase('uk');
+  const matches = entries.filter(a => `${a.title} ${a.note}`.toLocaleLowerCase('uk').includes(query)).sort((a, b) => Number(b.unlocked) - Number(a.unlocked));
+  $('#achievement-more').hidden = matches.length <= visibleAchievements;
+  $('#achievement-results').textContent = `Показано ${Math.min(matches.length, visibleAchievements)} / ${matches.length}`;
+  $('#achievement-list').innerHTML = matches.slice(0, visibleAchievements).map(a => `
     <article class="achievement ${a.unlocked ? 'unlocked' : ''}">
       <b>${a.icon} ${a.title}</b><p>${a.note}</p>
       <span>${a.unlocked ? '✓ Відкрито' : `${a.progress} / ${a.goal}`} · 🪙 ${a.unlocked ? 'Отримано' : 'Нагорода:'} ${a.reward}</span>
@@ -92,15 +99,11 @@ async function boot() {
   $('#btn-hc2').onclick = () => startLocal(2, 'hardcore');
   $('#btn-watch').onclick = () => watchRoom();
   $('#room-watch').addEventListener('keydown', e => { if (e.key === 'Enter') watchRoom(); });
-  const arcadeMenu = document.querySelector('#arcade-games');
-  for (const [kind, info] of Object.entries(ARCADE_GAMES)) {
-    const button = document.createElement('button');
-    button.className = 'menu-btn blue'; button.dataset.arcade = kind;
-    const title = document.createElement('b'); title.textContent = info.name;
-    const note = document.createElement('i'); note.textContent = '5 рівнів · ' + info.help;
-    button.append(title, note); arcadeMenu.append(button);
-  }
-  for (const b of document.querySelectorAll('[data-arcade]')) b.onclick = () => openArcade(b.dataset.arcade);
+  const launchArcade = (kind, mode) => mode ? openFighterMultiplayer(mode) : openArcade(kind, result => achievements.arcadeFinish(result));
+  for (const button of document.querySelectorAll('[data-arcade]')) button.onclick = () => openArcadeOptions(button.dataset.arcade, launchArcade);
+  initArcadeCatalog($('[data-screen="arcade"]'), launchArcade);
+  $('#achievement-search').oninput = () => renderAchievements();
+  $('#achievement-more').onclick = () => { visibleAchievements += 48; renderAchievements(false); };
   $('#btn-rough').onclick = () => { startLocal(1, 'football'); game.world.football.noRules = true; };
   const trip = document.createElement('button'); trip.id = 'btn-trip'; trip.textContent = 'Підніжка · F'; trip.style.cssText = 'position:fixed;right:20px;bottom:80px;z-index:20'; trip.hidden = true; document.body.append(trip);
   trip.onpointerdown = e => { e.preventDefault(); input.footballTrip = true; };

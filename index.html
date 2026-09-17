@@ -62,7 +62,7 @@
   .achievement p { margin: 6px 0; font-size: 14px; }
   .achievement span { font-size: 13px; font-weight: 800; }
   .achievement progress { display: block; width: 100%; height: 8px; margin-top: 8px; accent-color: #d69a13; }
-  #achievement-toast { position: fixed; z-index: 30; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
+  #achievement-toast { position: fixed; z-index: 110; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
     transform: translateX(-50%); width: max-content; max-width: 90vw; padding: 14px 20px;
     border: 2px solid #e8b949; border-radius: 18px; background: #fff6d9; color: var(--ink);
     box-shadow: 0 8px 30px #123a5233; font-weight: 800; text-align: center; pointer-events: none; }
@@ -259,6 +259,15 @@
 
   [hidden] { display: none !important; }
 
+  .arcade-variant-toggle { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+  .arcade-variant-toggle input { width: auto; }
+  .arcade-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; text-align: left; }
+  .arcade-filters label { min-width: 0; font-size: 13px; }
+  .arcade-filters select { display: block; width: 100%; min-width: 0; padding: 10px 4px; border: 1px solid #b9ccda; border-radius: 8px; background: white; color: var(--ink); font: inherit; }
+  .arcade-catalog-actions, .arcade-pagination { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+  .arcade-catalog-actions button, .arcade-pagination button { padding: 10px 14px; font-size: 14px; }
+  .arcade-pagination button:disabled { opacity: .4; cursor: default; }
+  #arcade-games [hidden] { display: none !important; }
   .arcade-panel { position: fixed; inset: 0; z-index: 100; background: #101c32; color: #edf5ff; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px max(12px, env(safe-area-inset-left)); overflow-y: auto; }
   .arcade-panel .arcade-header { width: min(900px, 100%); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .arcade-panel h2 { font-size: clamp(18px, 4vw, 26px); margin: 0; }
@@ -269,8 +278,17 @@
   .arcade-panel canvas { width: min(900px, 100%, calc(49dvh * 900 / 550)); height: auto; flex: 0 0 auto; aspect-ratio: 900 / 550; touch-action: none; border: 2px solid #5ba8ff; border-radius: 18px; }
   .arcade-panel canvas:focus-visible { outline: 3px solid #ffdc69; outline-offset: 2px; }
   .arcade-controls { touch-action: none; padding-bottom: env(safe-area-inset-bottom); }
+  .arcade-answers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; width: min(900px, 100%); }
+  .arcade-answers button { padding: 10px 5px; overflow-wrap: anywhere; background: #315674; }
+  @media (max-width: 450px) { .arcade-answers { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .arcade-controls button { min-width: 50px; background: #314e71; color: white; }
   .arcade-panel [hidden] { display: none !important; }
+  .arcade-variants-dialog { border: 0; border-radius: 24px; padding: 22px; width: min(700px, 94vw); max-height: 88dvh; overflow-y: auto; background: #f2f8ff; color: #193149; }
+  .arcade-variants-dialog::backdrop { background: #071629cc; }
+  .fighter-touch { display: grid; gap: 12px; width: min(900px, 100%); }
+  .fighter-touch .arcade-controls { border: 1px solid #456382; border-radius: 12px; padding: 10px; }
+  .fighter-touch .arcade-controls b { width: 100%; text-align: center; }
+  .arcade-toolbar input[data-room] { max-width: 110px; min-width: 0; padding: 8px; }
   .arcade-panel button:disabled { opacity: .45; }
   @media (max-width: 600px) { .arcade-panel { padding-top: 8px; gap: 7px; } .arcade-panel .arcade-help { font-size: 12px; } }
 </style>
@@ -301,10 +319,11 @@
             <b>⚽ Футбол</b><i>вид зверху · прицілюйся й забивай · боти та кімнати</i>
           </button>
           <button class="menu-btn dark" id="btn-rough"><b>👾 Футбол без правил</b><i>піксельний матч · підніжки на F · без судді</i></button>
-          <button class="menu-btn blue" data-arcade="pong"><b>🏓 Пінг-понг</b><i>5 рівнів · переграй бота</i></button>
-          <button class="menu-btn" data-arcade="bricks"><b>🧱 Арканоїд</b><i>5 різних полів · 3 життя</i></button>
-          <button class="menu-btn green" data-arcade="stars"><b>⭐ Ловець зірок</b><i>5 рівнів · зірки та бомби</i></button>
-          <button class="menu-btn green" data-go="arcade"><b>🎮 Аркади та рівні</b><i>10 нових ігор · 65 рівнів у 13 аркадах</i></button>
+          <button class="menu-btn blue" data-arcade="pong"><b>🏓 Пінг-понг</b><i>20 рівнів · переграй бота</i></button>
+          <button class="menu-btn" data-arcade="bricks"><b>🧱 Арканоїд</b><i>20 рівнів · 3 життя</i></button>
+          <button class="menu-btn green" data-arcade="stars"><b>⭐ Ловець зірок</b><i>20 рівнів · зірки та бомби</i></button>
+          <button class="menu-btn" data-arcade="fighter"><b>🥋 Тіньовий двобій</b><i>Бот · двоє на пристрої · онлайн-двобій</i></button>
+          <button class="menu-btn green" data-go="arcade"><b>🎮 Аркади та рівні</b><i>1023 гри · по 20 рівнів</i></button>
           <button class="menu-btn basketball-card" data-go="hoops">
             <b>🏀 Баскетбол</b><i>кошики, кидки та команди 4 на 4</i>
           </button>
@@ -332,8 +351,19 @@
 
       <section class="screen" data-screen="arcade" hidden>
         <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🎮 Аркади та рівні</h2></div>
-        <p class="sub">13 ігор по 5 рівнів. Перемагай, відкривай наступні рівні та повертайся до улюблених — прогрес зберігається.</p>
+        <p class="sub">1023 гри: 1000 комбінацій (40 механік × 5 наборів правил × 5 умов перемоги) та 23 основні гри. У кожної — 20 рівнів, окремий прогрес і досягнення.</p>
+        <label for="arcade-search">Пошук гри або правил</label>
+        <input id="arcade-search" type="search" placeholder="Годинник, шифр, орбіта, змійка…">
+        <p class="sub">Натисни кнопку гри — відкриються всі її варіанти. У «Тіньовому двобої» також є гра вдвох та онлайн.</p>
+        <div class="arcade-filters">
+          <label>Колекція<select id="arcade-collection"><option value="">Усі колекції</option><option value="second">✨ Колекція 2 · 500 варіантів</option><option value="first">Колекція 1 · 500 варіантів</option></select></label>
+          <label>Категорія<select id="arcade-category"><option value="">Усі категорії</option></select></label>
+          <label>Механіка<select id="arcade-mechanic"><option value="">Усі механіки</option></select></label>
+        </div>
+        <div class="arcade-catalog-actions"><button id="arcade-random" class="blue">🎲 Випадкова гра</button><button id="arcade-clear" class="ghost">Скинути фільтри</button></div>
+        <p id="arcade-count" role="status" aria-live="polite"></p>
         <div id="arcade-games" class="stack"></div>
+        <nav class="arcade-pagination" aria-label="Сторінки каталогу"><button id="arcade-previous" class="ghost" aria-label="Попередня сторінка">←</button><span id="arcade-page"></span><button id="arcade-next" class="ghost" aria-label="Наступна сторінка">→</button></nav>
       </section>
       <section class="screen" data-screen="classic" hidden>
         <div class="bar"><button class="back" data-go="home">←</button><h2>🎈 Класика</h2></div>
@@ -556,7 +586,11 @@
         <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🏆 Ачівки</h2></div>
         <p class="sub" id="achievement-count"></p>
         <p class="sub">За кожну ачівку — монети на покупки в магазині! Нагорода нараховується автоматично один раз. Прогрес зберігається в цьому браузері; у грі вдвох він спільний.</p>
+        <label for="achievement-search">Пошук досягнень</label>
+        <input id="achievement-search" type="search" placeholder="Назва гри або досягнення">
+        <p id="achievement-results" role="status" aria-live="polite"></p>
         <div id="achievement-list"></div>
+        <button id="achievement-more" class="ghost">Показати ще 48</button>
       </section>
 
       <section class="screen" data-screen="shop" hidden>

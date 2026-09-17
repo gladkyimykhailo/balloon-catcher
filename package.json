@@ -5,6 +5,11 @@
   "version": "1.0.0",
   "description": "Дитяча гра: не дай повітряній кульці впасти на підлогу. PixiJS + м'яка фізика + мультиплеєр.",
   "scripts": {
+    "services:install": "node scripts/services.js install",
+    "services:status": "node scripts/services.js status",
+    "services:restart": "node scripts/services.js restart",
+    "services:logs": "node scripts/services.js logs",
+    "services:stop": "node scripts/services.js stop",
     "dev": "vite",
     "test": "node --test tests/*.test.js",
     "server": "node server/index.js",

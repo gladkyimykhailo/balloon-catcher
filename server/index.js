@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { createFighterRooms } from './fighter-rooms.js';
 
 import { createWorld, step, addHand, removeHand, setHandTarget, restart, useMedkit, setSkin, setGlove, setChar, setPerks, useRage, useGlove, canTap, maxLivesOf } from '../src/shared/physics.js';
 import { TICK, MAX_PLAYERS, rulesFor, modeOf } from '../src/shared/constants.js';
@@ -210,10 +211,14 @@ function announce(room) {
   });
 }
 
-wss.on('connection', (ws) => {
+let fighterRooms;
+wss.on('connection', (ws, request) => {
   ws.on('error', () => ws.terminate());
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
+  if ((request?.url || '/').split('?')[0] === '/fighter') {
+    fighterRooms ??= createFighterRooms(); fighterRooms.connect(ws); return;
+  }
 
   ws.on('message', (raw) => {
     let m;
