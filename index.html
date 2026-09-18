@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#8fd3f4" />
+<title>Shelter Games</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎈</text></svg>" />
+<style>
+  :root {
+    --pink: #ff6b81;
+    --blue: #4dc9f6;
+    --ink: #123a52;
+    --card: rgba(255,255,255,.93);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #8fd3f4;
+    font-family: Nunito, 'Comic Sans MS', 'Segoe UI', system-ui, sans-serif; color: var(--ink);
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
+
+  .overlay { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10;
+    overflow-y: auto; padding: 12px 0; }
+  /* Меню з двома пікерами високе, тож на низькому екрані картка прокручується
+     сама, а не ховає кнопки «Грати» за краєм. */
+  .card { background: var(--card); border-radius: 28px; padding: 24px 28px; text-align: center;
+    box-shadow: 0 18px 50px rgba(10,50,80,.3); max-width: min(92vw, 520px);
+    max-height: 96vh; overflow-y: auto; }
+  /* Статична збірка (GitHub Pages) їде без сервера кімнат: онлайн-кнопки
+     там нікуди не ведуть, тож клас no-online прибирає їх з меню. */
+  body.no-online .online-block { display: none; }
+
+  h1 { margin: 0 0 4px; font-size: clamp(24px, 5vw, 36px); }
+  .sub { margin: 0 0 16px; opacity: .7; font-size: 16px; }
+
+  button { font: inherit; font-weight: 800; border: none; cursor: pointer; border-radius: 16px;
+    padding: 14px 20px; color: #fff; background: var(--pink); transition: transform .1s, filter .1s; }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: scale(.96); }
+  button.blue { background: var(--blue); }
+  button.ghost { background: #dfeaf2; color: var(--ink); }
+  .stack { display: grid; gap: 10px; }
+  #custom-form { display: grid; gap: 14px; text-align: left; }
+  #custom-form label { display: grid; gap: 5px; font-weight: 700; }
+  #custom-form input:not([type="checkbox"]), #custom-form select, #custom-saved {
+    width: 100%; min-width: 0; padding: 10px; font: inherit; border: 2px solid #cfe0ea; border-radius: 10px;
+    background: white; color: var(--ink); letter-spacing: normal; text-transform: none; }
+  #custom-form input[type="checkbox"] { width: auto; }
+  #custom-form fieldset { min-width: 0; border: 1px solid #cfe0ea; border-radius: 12px; display: grid; gap: 10px; }
+  #custom-form fieldset[hidden] { display: none; }
+  #custom-preview { display: block; width: 100%; border-radius: 12px; touch-action: none; cursor: crosshair; }
+  #custom-form .row > label { min-width: 0; }
+  #custom-status { min-height: 1.5em; font-size: 14px; }
+  #achievement-list { display: grid; gap: 10px; text-align: left; }
+  .achievement { padding: 14px; border: 2px solid #d6e2ec; border-radius: 16px; background: #f0f5f9; }
+  .achievement.unlocked { border-color: #e8b949; background: #fff6d9; }
+  .achievement p { margin: 6px 0; font-size: 14px; }
+  .achievement span { font-size: 13px; font-weight: 800; }
+  .achievement progress { display: block; width: 100%; height: 8px; margin-top: 8px; accent-color: #d69a13; }
+  #achievement-toast { position: fixed; z-index: 110; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
+    transform: translateX(-50%); width: max-content; max-width: 90vw; padding: 14px 20px;
+    border: 2px solid #e8b949; border-radius: 18px; background: #fff6d9; color: var(--ink);
+    box-shadow: 0 8px 30px #123a5233; font-weight: 800; text-align: center; pointer-events: none; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+
+  .divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 12px; opacity: .55; font-size: 13px; }
+  .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: currentColor; }
+
+  /* Поле коду кімнати. Три дрібниці, без яких у нього неможливо було писати:
+     body забороняє виділення тексту, і iOS через це не дає ставити курсор в
+     інпут; без явного фону й color-scheme темна тема браузера малювала темний
+     текст на темному полі — здавалось, що літери не з'являються зовсім; а
+     -webkit-text-fill-color тримає колір там, де Safari підмінює його своїм. */
+  input { font: inherit; font-weight: 800; text-align: center; letter-spacing: .3em; text-transform: uppercase;
+    border: 3px solid #cfe0ea; border-radius: 16px; padding: 13px; width: 100%;
+    color: var(--ink); -webkit-text-fill-color: var(--ink); background: #fff;
+    caret-color: var(--pink); color-scheme: light;
+    -webkit-user-select: text; user-select: text; }
+  input:focus { outline: none; border-color: var(--blue); }
+  input::placeholder { color: #9fb6c4; -webkit-text-fill-color: #9fb6c4; opacity: 1; }
+
+  #note { margin-top: 14px; font-size: 15px; font-weight: 700; opacity: .8; }
+  #note.error { color: #d63a51; }
+
+  /* HUD поверх канви */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #hud > * { pointer-events: auto; }
+  .corner { position: fixed; top: 14px; right: 14px; display: flex; gap: 8px; }
+  .corner button { padding: 10px 14px; border-radius: 14px; background: rgba(255,255,255,.85); color: var(--ink); }
+  /* Лівий верхній кут: долоні там не літають, тож бейдж не заважає грі. */
+  #room-badge { position: fixed; left: 14px; top: 62px; background: var(--card); border-radius: 16px;
+    padding: 9px 14px; display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); flex-wrap: wrap; max-width: min(90vw, 340px); font-size: 13px; }
+  #room-code { font-size: 22px; font-weight: 900; letter-spacing: .2em; color: var(--pink); }
+  #room-badge button { padding: 7px 12px; font-size: 13px; background: var(--blue); }
+  #peer-info { font-size: 13px; opacity: .75; width: 100%; }
+
+  /* Вибір скіна: рядок кольорових кружечків просто в меню. */
+  #skins, #gloves { display: flex; gap: 10px; justify-content: center; margin: 4px 0 10px; }
+  .skin { width: 46px; height: 46px; border-radius: 50%; padding: 0; font-size: 20px;
+    border: 4px solid transparent; box-shadow: 0 4px 12px rgba(10,50,80,.2); }
+  .skin[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.08); }
+  #wallet { font-size: 15px; opacity: .8; margin-top: 6px; }
+  #coins { color: #d98a00; }
+  #skulls { color: #6b4a8f; }
+  #tokens { color: #1f8f6a; }
+  #coins-hud { background: rgba(255,255,255,.85); border-radius: 14px; padding: 10px 14px;
+    font-weight: 900; color: #d98a00; }
+  #skulls-hud { background: #221a2e; border-radius: 14px; padding: 10px 14px;
+    font-weight: 900; color: #d3b6ff; }
+  #tokens-hud { background: #0f3b2e; border-radius: 14px; padding: 10px 14px;
+    font-weight: 900; color: #8ef0c8; }
+  /* Комірка магазину: кружечок і ціна під ним. */
+  .pick { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .price { font-size: 12px; font-weight: 800; color: #d98a00; min-height: 15px; }
+  .skin.locked { filter: grayscale(.75); opacity: .5; }
+  #skin-name, #glove-name, #char-name, #perk-name { font-weight: 900; }
+  #skin-ability, #glove-ability, #char-ability, #perk-ability { display: block; font-size: 14px; opacity: .75; margin-top: 2px; min-height: 34px; }
+  #skin-ability.warn, #glove-ability.warn, #char-ability.warn, #perk-ability.warn { color: #d63a51; opacity: 1; font-weight: 800; }
+
+  /* Хардкор — окремий режим, а не галочка складності, тож і в меню він живе
+     власним темним островом: видно з першого погляду, що це інша гра. */
+  #hardcore { background: #221a2e; color: #efe7fb; border-radius: 22px;
+    margin: 0 -16px; padding: 16px 18px 20px; }
+  #hardcore .divider { color: #b9a6d8; margin-top: 4px; }
+  #hardcore .sub { color: #cdbde8; opacity: .85; margin-bottom: 12px; font-size: 14px; }
+  #hardcore .price { color: #d3b6ff; }
+  #hardcore .skin[aria-pressed="true"] { border-color: #efe7fb; }
+  #chars { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 4px 0 10px; }
+  #char-ability { opacity: .85; }
+  button.dark { background: #6b4a8f; }
+  button.dark:hover { filter: brightness(1.2); }
+
+  /* Тім-ап — свій острів, як і хардкор, але теплий: це режим про друзів,
+     а не про виживання. */
+  #teamup { background: #0f3b2e; color: #e4fff4; border-radius: 22px;
+    margin: 0 -16px; padding: 16px 18px 20px; }
+  #teamup .divider { color: #8ef0c8; margin-top: 4px; }
+  #teamup .sub { color: #bdf0dd; opacity: .9; margin-bottom: 12px; font-size: 14px; }
+  #teamup .price { color: #8ef0c8; }
+  #teamup .skin[aria-pressed="true"] { border-color: #e4fff4; }
+  #perks { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 4px 0 10px; }
+  button.green { background: #1f8f6a; }
+  button.green:hover { filter: brightness(1.2); }
+
+  /* Аптечка. Внизу зліва: там не літає ні кулька, ні долоні, і великою
+     кнопкою зручно влучити пальцем на планшеті. */
+  /* Панель не ловить мишу — інакше, ведучи руку до відра в кутку, гравець
+     заводив би курсор на неї, і канва переставала б бачити рух. Ловлять лише
+     самі кнопки. */
+  #med, #rage { pointer-events: none; }
+  #btn-med, #btn-rage { pointer-events: auto; }
+  #med { position: fixed; left: 14px; bottom: 14px; display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); }
+  #btn-med { background: #3ec46d; padding: 12px 18px; font-size: 17px; }
+  #btn-med:disabled, #btn-rage:disabled { background: #c3d2db; color: #7d909d; cursor: default; filter: none; transform: none; }
+  #med-left, #rage-left { font-size: 15px; opacity: .75; }
+
+  /* Рукавичка від скунсового газу — третьою кнопкою в тій самій колонці. */
+  #glove { pointer-events: none; }
+  #btn-glove { pointer-events: auto; }
+  #glove { position: fixed; left: 14px; bottom: 138px; display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); }
+  #btn-glove { background: #3ec46d; padding: 12px 18px; font-size: 17px; }
+  #btn-glove:disabled { background: #c3d2db; color: #7d909d; cursor: default; filter: none; transform: none; }
+  #btn-glove.on { background: #1f8f6a; animation: pulse .5s infinite alternate; }
+  #glove-left { font-size: 15px; opacity: .75; }
+
+  /* Шал боксерської перчатки — поряд з аптечкою, тим же розміром під палець. */
+  #rage { position: fixed; left: 14px; bottom: 76px; display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 18px; padding: 10px 14px; font-weight: 800;
+    box-shadow: 0 8px 24px rgba(10,50,80,.22); }
+  #btn-rage { background: #ff7a1a; padding: 12px 18px; font-size: 17px; }
+  #btn-rage.on { background: #ff3b30; animation: pulse .5s infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.06); } }
+
+  #tip { position: fixed; left: 50%; transform: translateX(-50%); top: 132px; background: rgba(255,255,255,.9);
+    border-radius: 14px; padding: 9px 18px; font-weight: 700; font-size: 15px; transition: opacity .8s; text-align: center; pointer-events: none; }
+  #tip.fade { opacity: 0; }
+
+  /* ---------------------------------------------------------- екрани меню
+     Кожен режим і магазин — окремий екран однієї картки: на головному видно
+     лише «у що грати», а подробиці режиму — там, де його вибрано. */
+  .bar { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; text-align: left; }
+  .bar h2 { margin: 0; font-size: clamp(21px, 5vw, 28px); }
+  .back { background: #dfeaf2; color: var(--ink); padding: 10px 16px; font-size: 20px; line-height: 1; }
+  #hardcore .back { background: #3a2d4e; color: #efe7fb; }
+  #teamup .back { background: #17553f; color: #e4fff4; }
+
+  /* Кнопка головного екрана: назва режиму і рядок про те, що це таке, — щоб
+     вибирали не навпомацки. */
+  .menu-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    text-align: left; padding: 15px 20px; }
+  .menu-btn b { font-size: 19px; }
+  .menu-btn i { font-style: normal; font-size: 13px; font-weight: 700; opacity: .82; }
+
+  .basketball-card { background: linear-gradient(120deg, #f18c31, #d66425); border-radius: 16px; }
+  .basketball-teams { display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+    gap: 12px; padding: 14px 10px; margin: 12px 0; border-radius: 14px; background: #fff0db; font-weight: 900; }
+  .basketball-teams b { color: #9a6335; font-size: 14px; }
+  .basketball-window { padding: 18px; border-radius: 22px; text-align: left;
+    background: linear-gradient(150deg, #233c57, #102236); color: #f5f9ff; }
+  .basketball-window .bar .back { background: #344c65; color: #fff; }
+  .basketball-subtitle { margin: 8px 0 14px; color: #c6d6e6; font-size: 14px; }
+  .basketball-window .basketball-teams { background: #30465d; font-size: 13px; }
+  .basketball-window .basketball-teams b { color: #b5c9dc; }
+  .basketball-option { padding: 16px; border: 1px solid #496079; border-radius: 16px; background: #263c53; }
+  .basketball-option h3 { margin: 0 0 6px; font-size: 19px; }
+  .basketball-option p { margin: 0 0 12px; font-size: 14px; line-height: 1.45; color: #c6d6e6; }
+  .basketball-option > button { width: 100%; background: #e9802c; }
+  #hoops-room-bots { width: 20px; height: 20px; padding: 0; vertical-align: middle; accent-color: #e9802c; }
+  .bot-difficulty { display: grid; gap: 8px; margin-bottom: 14px; color: #c6d6e6; }
+  .bot-difficulty select { width: 100%; padding: 12px; border: 1px solid #496079;
+    border-radius: 10px; background: #30465d; color: #fff; font: inherit; }
+  .basketball-option .row { flex-wrap: wrap; }
+  .basketball-option .row > * { flex: 1 1 130px; min-width: 0; }
+  .basketball-code-label { font-size: 13px; color: #c6d6e6; }
+  .basketball-rules { margin: 16px 0 0; color: #bacde0; font-size: 12px; line-height: 1.6; }
+  .basketball-option .basketball-offline { display: none; margin: 0; color: #ffce91; }
+  body.no-online .basketball-offline { display: block; }
+  .shop-wallet { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; }
+  .shop-category { margin-top: 22px; padding-top: 16px; border-top: 1px solid #c7dbe8; }
+  .shop-category h3 { margin: 0; font-size: 18px; }
+  .shop-category .sub.hint { margin: 8px 0 14px; }
+  #hardcore > button[data-go="shop"], #teamup > button[data-go="shop"] { margin-bottom: 14px; }
+  .wallet-line { margin-top: 16px; font-size: 15px; font-weight: 800; opacity: .75; }
+  .sub.hint { font-size: 13px; margin: 16px 0 0; }
+
+  /* Телефон у ландшафті — це екран заввишки 340-400 px: там меню має
+     вміщатись цілком, а не прокручуватись від першої ж кнопки. */
+  @media (max-height: 560px) {
+    .card { padding: 16px 20px; border-radius: 22px; }
+    h1 { font-size: clamp(20px, 4vw, 26px); }
+    .sub { font-size: 14px; margin-bottom: 10px; }
+    .menu-btn { padding: 10px 16px; }
+    .menu-btn b { font-size: 16px; }
+    .menu-btn i { font-size: 12px; }
+    .stack { gap: 7px; }
+    .wallet-line { margin-top: 10px; }
+  }
+
+  /* Зовсім низький екран (телефон у ландшафті, 340-430 px): підпис режиму
+     переїжджає в той самий рядок, що й назва, а привітання ховається —
+     головне меню мусить вміщатись без прокрутки саме тут. */
+  @media (max-height: 430px) {
+    .screen[data-screen="home"] > .sub { display: none; }
+    .menu-btn { flex-direction: row; align-items: baseline; gap: 8px; padding: 9px 14px; }
+    .menu-btn b { flex: none; }
+    .menu-btn i { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
+
+  [hidden] { display: none !important; }
+
+  .arcade-variant-toggle { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+  .arcade-variant-toggle input { width: auto; }
+  .arcade-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; text-align: left; }
+  .arcade-filters label { min-width: 0; font-size: 13px; }
+  .arcade-filters select { display: block; width: 100%; min-width: 0; padding: 10px 4px; border: 1px solid #b9ccda; border-radius: 8px; background: white; color: var(--ink); font: inherit; }
+  .arcade-catalog-actions, .arcade-pagination { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+  .arcade-catalog-actions button, .arcade-pagination button { padding: 10px 14px; font-size: 14px; }
+  .arcade-pagination button:disabled { opacity: .4; cursor: default; }
+  #arcade-games [hidden] { display: none !important; }
+  .arcade-panel { position: fixed; inset: 0; z-index: 100; background: #101c32; color: #edf5ff; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px max(12px, env(safe-area-inset-left)); overflow-y: auto; }
+  .arcade-panel .arcade-header { width: min(900px, 100%); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .arcade-panel h2 { font-size: clamp(18px, 4vw, 26px); margin: 0; }
+  .arcade-panel button { min-height: 42px; padding: 9px 16px; font-size: 15px; }
+  .arcade-toolbar, .arcade-buttons, .arcade-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+  .arcade-panel select { background: #243955; color: white; border-radius: 8px; padding: 6px; max-width: 240px; }
+  .arcade-panel p { margin: 0; text-align: center; max-width: 850px; font-size: 14px; }
+  .arcade-panel canvas { width: min(900px, 100%, calc(49dvh * 900 / 550)); height: auto; flex: 0 0 auto; aspect-ratio: 900 / 550; touch-action: none; border: 2px solid #5ba8ff; border-radius: 18px; }
+  .arcade-panel canvas:focus-visible { outline: 3px solid #ffdc69; outline-offset: 2px; }
+  .arcade-controls { touch-action: none; padding-bottom: env(safe-area-inset-bottom); }
+  .arcade-answers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; width: min(900px, 100%); }
+  .arcade-answers button { padding: 10px 5px; overflow-wrap: anywhere; background: #315674; }
+  @media (max-width: 450px) { .arcade-answers { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .arcade-controls button { min-width: 50px; background: #314e71; color: white; }
+  .arcade-panel [hidden] { display: none !important; }
+  .arcade-variants-dialog { border: 0; border-radius: 24px; padding: 22px; width: min(700px, 94vw); max-height: 88dvh; overflow-y: auto; background: #f2f8ff; color: #193149; }
+  .arcade-variants-dialog::backdrop { background: #071629cc; }
+  .fighter-touch { display: grid; gap: 12px; width: min(900px, 100%); }
+  .fighter-touch .arcade-controls { border: 1px solid #456382; border-radius: 12px; padding: 10px; }
+  .fighter-touch .arcade-controls b { width: 100%; text-align: center; }
+  .arcade-toolbar input[data-room] { max-width: 110px; min-width: 0; padding: 8px; }
+  .arcade-panel button:disabled { opacity: .45; }
+  @media (max-width: 600px) { .arcade-panel { padding-top: 8px; gap: 7px; } .arcade-panel .arcade-help { font-size: 12px; } }
+</style>
+  <script type="module" crossorigin src="./assets/index-Dxpk1gHR.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/Geometry-CqfSc04Y.js">
+  <link rel="modulepreload" crossorigin href="./assets/canvasUtils-uRsybXj2.js">
+  <link rel="modulepreload" crossorigin href="./assets/RenderTargetSystem-Bq_cEeTo.js">
+  <link rel="modulepreload" crossorigin href="./assets/getTextureBatchBindGroup-8Sk_S9Kb.js">
+  <link rel="modulepreload" crossorigin href="./assets/CanvasPool-CvU8LHxk.js">
+  <link rel="modulepreload" crossorigin href="./assets/BufferResource-u_Ll_T05.js">
+</head>
+<body>
+  <div id="stage"></div>
+
+  <!-- Меню екранне: головний екран і по екрану на кожен режим та магазин.
+       Раніше все це жило однією довгою карткою, де «Грати» губилось між двома
+       рядами магазину, а до тім-апа доводилось прокручувати півекрана. -->
+  <div id="menu" class="overlay">
+    <div class="card">
+
+      <section class="screen" data-screen="home">
+        <h1>🎈 Shelter Games</h1>
+        <p class="sub">Обирай гру, збирай друзів і встановлюй рекорди.</p>
+        <div class="stack">
+          <button class="menu-btn" data-go="classic">
+            <b>🎈 Класика</b><i>одному, вдвох або кімнатою на чотирьох</i>
+          </button>
+          <button class="menu-btn dark" data-go="hardcore">
+            <b>☠ Хардкор</b><i>два серця, камінці з неба, персонажі зі здібностями</i>
+          </button>
+          <button class="menu-btn green" data-go="team">
+            <b>🤝 Тім-ап</b><i>кулька ходить по руках: тапнув — пасуй</i>
+          </button>
+          <button class="menu-btn green" data-go="football">
+            <b>⚽ Футбол</b><i>вид зверху · прицілюйся й забивай · боти та кімнати</i>
+          </button>
+          <button class="menu-btn dark" id="btn-rough"><b>👾 Футбол без правил</b><i>піксельний матч · підніжки на F · без судді</i></button>
+          <button class="menu-btn blue" data-arcade="pong"><b>🏓 Пінг-понг</b><i>20 рівнів · переграй бота</i></button>
+          <button class="menu-btn" data-arcade="bricks"><b>🧱 Арканоїд</b><i>20 рівнів · 3 життя</i></button>
+          <button class="menu-btn green" data-arcade="stars"><b>⭐ Ловець зірок</b><i>20 рівнів · зірки та бомби</i></button>
+          <button class="menu-btn" data-arcade="fighter"><b>🥋 Тіньовий двобій</b><i>Бот · двоє на пристрої · онлайн-двобій</i></button>
+          <button class="menu-btn green" data-go="arcade"><b>🎮 Аркади та рівні</b><i>1023 гри · по 20 рівнів</i></button>
+          <button class="menu-btn basketball-card" data-go="hoops">
+            <b>🏀 Баскетбол</b><i>кошики, кидки та команди 4 на 4</i>
+          </button>
+          <button class="menu-btn basketball-card" data-go="basketball">
+            <b>🏐 Волейбалл</b><i>гра з ботом або команди 4 на 4</i>
+          </button>
+          <button class="menu-btn blue online-block" data-go="spectator">
+            <b>👁 Спостерігач</b><i>дивись матч у кімнаті за кодом</i>
+          </button>
+          <button class="menu-btn blue" data-go="shop">
+            <b>🛍 Магазин</b><i>кульки, перчатки й здібності всіх режимів</i>
+          </button>
+          <button class="menu-btn ghost" data-go="help">
+            <b>📖 Як грати</b><i>правила, загрози й гарячі клавіші</i>
+          </button>
+          <button class="menu-btn green" data-go="custom">
+            <b>🛠 Мої рівні</b><i>створи свої правила для будь-якої гри</i>
+          </button>
+          <button class="menu-btn ghost" data-go="achievements">
+            <b>🏆 Ачівки</b><i>від першого тапу до перемоги над складним ботом</i>
+          </button>
+        </div>
+        <div class="wallet-line"><b data-w="coins">🪙 0</b> · <b data-w="skulls">☠ 0</b> · <b data-w="tokens">🤝 0</b></div>
+      </section>
+
+      <section class="screen" data-screen="arcade" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🎮 Аркади та рівні</h2></div>
+        <p class="sub">1023 гри: 1000 комбінацій (40 механік × 5 наборів правил × 5 умов перемоги) та 23 основні гри. У кожної — 20 рівнів, окремий прогрес і досягнення.</p>
+        <label for="arcade-search">Пошук гри або правил</label>
+        <input id="arcade-search" type="search" placeholder="Годинник, шифр, орбіта, змійка…">
+        <p class="sub">Натисни кнопку гри — відкриються всі її варіанти. У «Тіньовому двобої» також є гра вдвох та онлайн.</p>
+        <div class="arcade-filters">
+          <label>Колекція<select id="arcade-collection"><option value="">Усі колекції</option><option value="second">✨ Колекція 2 · 500 варіантів</option><option value="first">Колекція 1 · 500 варіантів</option></select></label>
+          <label>Категорія<select id="arcade-category"><option value="">Усі категорії</option></select></label>
+          <label>Механіка<select id="arcade-mechanic"><option value="">Усі механіки</option></select></label>
+        </div>
+        <div class="arcade-catalog-actions"><button id="arcade-random" class="blue">🎲 Випадкова гра</button><button id="arcade-clear" class="ghost">Скинути фільтри</button></div>
+        <p id="arcade-count" role="status" aria-live="polite"></p>
+        <div id="arcade-games" class="stack"></div>
+        <nav class="arcade-pagination" aria-label="Сторінки каталогу"><button id="arcade-previous" class="ghost" aria-label="Попередня сторінка">←</button><span id="arcade-page"></span><button id="arcade-next" class="ghost" aria-label="Наступна сторінка">→</button></nav>
+      </section>
+      <section class="screen" data-screen="classic" hidden>
+        <div class="bar"><button class="back" data-go="home">←</button><h2>🎈 Класика</h2></div>
+        <p class="sub">Перший рівень спокійний, а далі кожен додає нову загрозу:
+          шипи ⚠, чайку 🕊, їжачка 🦔, камінці 🪨.</p>
+        <div class="stack">
+          <button id="btn-solo">👋 Грати одному</button>
+          <button id="btn-local2" class="blue">👋👋 Вдвох за одним комп'ютером</button>
+          <div class="online-block stack">
+            <div class="divider">кімната для друзів — до 4 гравців</div>
+            <button id="btn-host" class="ghost">🎈 Створити кімнату</button>
+            <div class="row">
+              <input id="room-input" type="text" maxlength="4" placeholder="КОД"
+                     autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+              <button id="btn-join" class="ghost">Приєднатись</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" data-screen="hardcore" hidden>
+        <div id="hardcore">
+          <div class="bar"><button class="back" data-go="home">←</button><h2>☠ Хардкор</h2></div>
+          <p class="sub">Два серця замість трьох, шипи на кожному рівні й камінці з неба.
+            Замість долоні — персонаж зі своєю здібністю і своїм мінусом.
+            За кожен пройдений хардкор-рівень дають черепи ☠ — інша валюта, і купуються за неї лише персонажі.</p>
+          <button class="dark" data-go="shop">🛍 Персонажі та здібності в магазині</button>
+          <div class="stack">
+            <div class="row">
+              <button id="btn-hc" class="dark">☠ Одному</button>
+              <button id="btn-hc2" class="dark">☠ Удвох</button>
+            </div>
+            <div class="online-block stack">
+              <button id="btn-hc-host" class="dark">☠ Створити хардкор-кімнату</button>
+              <div class="row">
+                <input id="room-hc" type="text" maxlength="4" placeholder="КОД"
+                       autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <button id="btn-hc-join" class="dark">Приєднатись</button>
+              </div>
+            </div>
+          </div>
+          <div class="wallet-line"><b data-w="skulls">☠ 0</b> на персонажів</div>
+        </div>
+      </section>
+
+      <section class="screen" data-screen="team" hidden>
+        <div id="teamup">
+          <div class="bar"><button class="back" data-go="home">←</button><h2>🤝 Тім-ап</h2></div>
+          <p class="sub">Кулька ходить по руках: тапнувши, ти не можеш тапнути вдруге, поки її не зачепить хтось інший.
+            У кожного свої три серця, за серії пасів команда отримує бафи, а пастки 🕸 🫧 ловлять то гравця, то кульку —
+            і що вищий рівень, то густіше вони сиплються.</p>
+          <button class="green" data-go="shop">🛍 Командні здібності в магазині</button>
+          <div class="stack">
+            <button id="btn-team2" class="green">🤝 Удвох за одним комп'ютером</button>
+            <div class="online-block stack">
+              <button id="btn-team-host" class="green">🤝 Створити тім-ап кімнату</button>
+              <div class="row">
+                <input id="room-team" type="text" maxlength="4" placeholder="КОД"
+                       autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <button id="btn-team-join" class="green">Приєднатись</button>
+              </div>
+            </div>
+          </div>
+          <div class="wallet-line"><b data-w="tokens">🤝 0</b> на командні переваги</div>
+        </div>
+      </section>
+
+      <section class="screen basketball-window" data-screen="football" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>⚽ Футбол</h2></div><p class="sub">Аути, кутові, удари від воріт, офсайд. F — підніжка: штрафний або пенальті, дві жовті — вилучення. Скорочений матч 4×4 до 5 голів.</p>
+        <p class="sub">Вид зверху · 4 на 4 · перші 5 голів — перемога!</p>
+        <p>Ти — футболіст із білим кільцем. Помаранчеві атакують праві ворота, сині — ліві. Підійди до м’яча, щоб забрати його. Можна відібрати м’яч у суперника.</p>
+        <p><b>WASD / стрілки</b> — біг. Без м’яча можна вести гравця мишкою або пальцем. З м’ячем — прицілюйся вказівником, <b>клік / пробіл</b> — удар. На телефоні наведи пальцем і відпусти, щоб ударити.</p>
+        <div class="stack">
+          <div class="basketball-option">
+            <h3>🤖 Матч із ботами</h3>
+            <p>Ти та 3 напарники проти 4 ботів. У кожної команди є воротар.</p>
+            <label class="bot-difficulty" for="football-difficulty">Складність суперників
+              <select id="football-difficulty"><option value="easy">Легка — повільні, часто промахуються</option><option value="medium" selected>Середня — збалансована гра</option><option value="hard">Складна — швидкі, точні, перехоплюють</option></select>
+            </label>
+            <p>Твої напарники завжди середнього рівня. Складність змінює лише команду суперників, включно з воротарем.</p>
+            <button id="btn-football-bot" class="green">На поле →</button>
+          </div>
+          <div class="basketball-option online-block">
+            <h3>👥 Кімната 4 на 4</h3>
+            <p>До 8 друзів за кодом. Гравці замінюють ботів, коли приєднуються.</p>
+            <label><input type="checkbox" id="football-room-bots" checked style="width:auto"> Заповнити вільні місця ботами</label>
+            <div class="stack">
+              <button id="btn-football-host" class="green">Створити кімнату</button>
+              <div class="row"><input id="room-football" maxlength="4" placeholder="КОД" aria-label="Код футбольної кімнати" autocomplete="off"><button id="btn-football-join" class="blue">Приєднатися</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen basketball-window" data-screen="basketball" aria-labelledby="basketball-title" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад у головне меню">←</button><h2 id="basketball-title">🏐 Волейбалл</h2></div>
+        <p class="basketball-subtitle">Обери, з ким вийдеш на майданчик</p>
+        <div class="basketball-teams" aria-label="Дві команди по чотири гравці">
+          <span>🟠 До 4 гравців</span><b>VS</b><span>🔵 До 4 гравців</span>
+        </div>
+        <button class="blue" data-go="shop">🧤 Перчатки та скіни</button>
+        <p class="basketball-subtitle">Вибір із магазину діє в обох спортивних режимах. Тут скіни й перчатки змінюють вигляд.</p>
+        <div class="stack">
+          <div class="basketball-option">
+            <h3>🤖 Гра з ботом</h3>
+            <p>Ти проти комп’ютера. Грай одразу, без кімнати.</p>
+            <label class="bot-difficulty" for="bot-difficulty">Складність бота
+              <select id="bot-difficulty">
+                <option value="easy">Ізі — повільний</option>
+                <option value="medium" selected>Мідіум — звичайний</option>
+                <option value="hard">Хард — швидкий</option>
+              </select>
+            </label>
+            <button id="btn-basket-bot">Грати з ботом →</button>
+          </div>
+          <div class="basketball-option">
+            <h3>👥 Кімната 4 на 4</h3>
+            <p>Запроси друзів або приєднайся за кодом. До 8 гравців, спільний рахунок команди.</p>
+            <div class="online-block stack">
+              <button id="btn-basket-host" class="blue">Створити кімнату</button>
+              <label for="room-basket" class="basketball-code-label">Маєш код кімнати?</label>
+              <div class="row">
+                <input id="room-basket" type="text" maxlength="4" placeholder="КОД" autocomplete="off"
+                       autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <button id="btn-basket-join" class="blue">Приєднатись</button>
+              </div>
+            </div>
+            <p class="basketball-offline" role="status">Сервер кімнат зараз не підключений. З ботом можна грати одразу.</p>
+          </div>
+        </div>
+        <p class="basketball-rules">М’яч торкнувся підлоги суперників — +1 очко. Перемога при 5 очках.<br />
+          Керуй мишкою, дотиком або WASD.</p>
+      </section>
+
+      <section class="screen basketball-window" data-screen="hoops" aria-labelledby="hoops-title" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад у головне меню">←</button><h2 id="hoops-title">🏀 Баскетбол</h2></div>
+        <p class="basketball-subtitle">Обери, з ким вийдеш на майданчик</p>
+        <div class="basketball-teams" aria-label="Дві команди по чотири гравці">
+          <span>🟠 До 4 гравців</span><b>VS</b><span>🔵 До 4 гравців</span>
+        </div>
+        <button class="blue" data-go="shop">🧤 Перчатки та скіни</button>
+        <p class="basketball-subtitle">Вибір із магазину діє в обох спортивних режимах. Тут скіни й перчатки змінюють вигляд.</p>
+        <div class="stack">
+          <div class="basketball-option">
+            <h3>🤖 Гра з ботом</h3>
+            <p>Ти проти комп’ютера. Грай одразу, без кімнати.</p>
+            <label class="bot-difficulty" for="hoops-difficulty">Складність бота
+              <select id="hoops-difficulty">
+                <option value="easy">Ізі — повільний</option>
+                <option value="medium" selected>Мідіум — звичайний</option>
+                <option value="hard">Хард — швидкий</option>
+              </select>
+            </label>
+            <button id="btn-hoops-bot">Грати з ботом →</button>
+          </div>
+          <div class="basketball-option">
+            <h3>👥 Кімната 4 на 4</h3>
+            <p>Запроси друзів або приєднайся за кодом. До 8 гравців, спільний рахунок команди.</p>
+            <div class="online-block stack">
+              <label><input type="checkbox" id="hoops-room-bots" checked /> Заповнити вільні місця ботами (4 на 4)</label>
+              <button id="btn-hoops-host" class="blue">Створити кімнату</button>
+              <label for="room-hoops" class="basketball-code-label">Маєш код кімнати?</label>
+              <div class="row">
+                <input id="room-hoops" type="text" maxlength="4" placeholder="КОД" autocomplete="off"
+                       autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <button id="btn-hoops-join" class="blue">Приєднатись</button>
+              </div>
+            </div>
+            <p class="basketball-offline" role="status">Сервер кімнат зараз не підключений. З ботом можна грати одразу.</p>
+          </div>
+        </div>
+        <p class="basketball-rules">Закинь м’яч у кошик суперника — +2 очки. Перемога при 10 очках.<br />
+          Рухайся всім майданчиком. Торкнись м’яча, щоб кинути в кошик. Керуй мишкою, дотиком або WASD.</p>
+      </section>
+
+      <section class="screen" data-screen="spectator" hidden>
+        <div class="bar"><button class="back" data-go="home">←</button><h2>👁 Спостерігач</h2></div>
+        <p>Введи код кімнати, у якій грають друзі. Ти дивитимешся матч без участі у грі.</p>
+        <label for="room-watch">Код кімнати</label>
+        <div class="row">
+          <input id="room-watch" maxlength="4" placeholder="КОД" autocomplete="off" />
+          <button id="btn-watch" class="blue">Дивитися →</button>
+        </div>
+        <p>Затисни мишку й рухай огляд. Коліщатко — масштаб, подвійний клік — весь майданчик. На сенсорі перетягуй пальцем.</p>
+      </section>
+
+      <section class="screen" data-screen="custom" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🛠 Мої рівні</h2></div>
+        <p class="sub">Створи власний рівень для локальної гри. Збережи його в цьому браузері й грай знову!</p>
+        <label for="custom-saved">Збережені рівні</label>
+        <select id="custom-saved"></select>
+        <div class="row"><button id="custom-new" class="ghost">＋ Новий</button><button id="custom-delete" class="ghost" disabled>Видалити</button></div>
+        <p id="custom-status" role="status"></p>
+        <form id="custom-form">
+          <label>Назва рівня<input name="name" maxlength="50" required value="Мій рівень"></label>
+          <label>Гра<select name="mode"></select></label>
+          <div class="row">
+            <label><span id="custom-target-label">Влучань для проходження</span><input name="target" type="number" min="1" max="1000" step="1" required></label>
+            <label>Темп гри <output id="custom-pace-value"></output><input name="pace" type="range" min="0.5" max="1.5" step="0.1"></label>
+          </div>
+          <fieldset id="custom-balloon"><legend>Кулька</legend>
+            <div class="row"><label>Життя<input name="lives" type="number" min="1" max="10" required></label>
+            <label>Гравці<select name="players"><option value="1">Один</option><option value="2">Удвох на одному екрані</option></select></label></div>
+            <label><span><input name="hazards" type="checkbox" checked> Увімкнути звичайні загрози режиму</span></label>
+          </fieldset>
+          <fieldset id="custom-sport" hidden><legend>Команди та боти</legend>
+            <label>Гравців у кожній команді<select name="teamSize"><option value="1">1 на 1</option><option value="2">2 на 2</option><option value="3">3 на 3</option><option value="4">4 на 4</option></select></label>
+            <label>Складність суперників<select name="difficulty"><option value="easy">Легка</option><option value="medium">Середня</option><option value="hard">Складна</option></select></label>
+            <small>Ти керуєш першим гравцем. Решта — боти; твої напарники середнього рівня.</small>
+          </fieldset>
+          <label>Старт м’яча: <output id="custom-spawn-value"></output></label>
+          <canvas id="custom-preview" width="600" height="400" aria-label="Схема рівня. Натисни або перетягни, щоб вибрати старт м’яча."></canvas>
+          <small>Натисни на схему або перетягни м’яч. Можна також задати координати:</small>
+          <div class="row"><label>X<input name="spawnX" type="number" min="150" max="1050" required></label><label>Y<input name="spawnY" type="number" min="160" max="550" required></label></div>
+          <div class="row"><button id="custom-save" type="button" class="blue">Зберегти</button><button type="submit" class="green">▶ Грати</button></div>
+        </form>
+      </section>
+
+      <section class="screen" data-screen="achievements" hidden>
+        <div class="bar"><button class="back" data-go="home" aria-label="Назад">←</button><h2>🏆 Ачівки</h2></div>
+        <p class="sub" id="achievement-count"></p>
+        <p class="sub">За кожну ачівку — монети на покупки в магазині! Нагорода нараховується автоматично один раз. Прогрес зберігається в цьому браузері; у грі вдвох він спільний.</p>
+        <label for="achievement-search">Пошук досягнень</label>
+        <input id="achievement-search" type="search" placeholder="Назва гри або досягнення">
+        <p id="achievement-results" role="status" aria-live="polite"></p>
+        <div id="achievement-list"></div>
+        <button id="achievement-more" class="ghost">Показати ще 48</button>
+      </section>
+
+      <section class="screen" data-screen="shop" hidden>
+        <div class="bar"><button class="back" data-go="home">←</button><h2>🛍 Магазин</h2></div>
+        <div id="wallet" class="shop-wallet" aria-label="Твій гаманець">
+          <b data-w="coins">🪙 0</b><b data-w="skulls">☠ 0</b><b data-w="tokens">🤝 0</b>
+        </div>
+        <div class="divider">скін кульки</div>
+        <div id="skins"></div>
+        <div id="skin-pick"><span id="skin-name"></span><span id="skin-ability"></span></div>
+        <div class="divider">перчатка</div>
+        <div id="gloves"></div>
+        <div id="glove-pick"><span id="glove-name"></span><span id="glove-ability"></span></div>
+        <div class="shop-category">
+          <h3>☠ Хардкор — персонажі та здібності</h3>
+          <p class="sub hint">Кожен персонаж має свою здібність. Обери купленого персонажа для хардкору.
+            Черепи ☠ заробляються за пройдені хардкор-рівні.</p>
+          <div id="chars"></div>
+          <div id="char-pick"><span id="char-name"></span><span id="char-ability"></span></div>
+        </div>
+        <div class="shop-category">
+          <h3>🤝 Тім-ап — командні здібності</h3>
+          <p class="sub hint">Усі куплені переваги діють автоматично в тім-апі.
+            Жетони 🤝 заробляються за паси та командні бафи.</p>
+          <div id="perks"></div>
+          <div id="perk-pick"><span id="perk-name"></span><span id="perk-ability"></span></div>
+        </div>
+      </section>
+
+      <section class="screen" data-screen="help" hidden>
+        <div class="bar"><button class="back" data-go="home">←</button><h2>📖 Як грати</h2></div>
+        <p class="sub">Обирай гру, збирай друзів і встановлюй рекорди. Веди мишкою або
+          <b>WASD</b>; удвох за одним комп'ютером другий грає стрілками, на сенсорі — просто два пальці.</p>
+        <p class="sub">Кожен рівень додає нову загрозу: шипи ⚠ (їх можна відбити рукою),
+          чайку 🕊, їжачка 🦔, камінці 🪨 у хардкорі, пастки 🕸 🫧 у тім-апі.</p>
+        <p class="sub">Гарячі клавіші: <b>H</b> — аптечка (повертає серце), <b>B</b> — шал
+          боксерської перчатки (5 секунд без кулдауну), <b>G</b> — рукавичка від газу скунса,
+          <b>Esc</b> — назад у меню, <b>Пробіл</b> — ще раз після програшу.</p>
+      </section>
+
+      <div id="note" hidden></div>
+    </div>
+  </div>
+
+  <div id="hud" hidden>
+    <div class="corner">
+      <span id="coins-hud" data-w="coins">🪙 0</span>
+      <span id="skulls-hud" data-w="skulls" hidden>☠ 0</span>
+      <span id="tokens-hud" data-w="tokens" hidden>🤝 0</span>
+      <button id="btn-full" hidden>⛶</button>
+      <button id="btn-mute">🔊</button>
+      <button id="btn-menu">Меню</button>
+    </div>
+    <div id="tip"></div>
+    <div id="med">
+      <button id="btn-med">🩹 Аптечка</button>
+      <span id="med-left">5 / 5 на рівень</span>
+    </div>
+    <div id="glove" hidden>
+      <button id="btn-glove">🧤 Рукавичка</button>
+      <span id="glove-left">4 / 4 на рівень</span>
+    </div>
+    <div id="rage" hidden>
+      <button id="btn-rage">🥊 Шал</button>
+      <span id="rage-left">2 / 2 на рівень</span>
+    </div>
+    <div id="room-badge" hidden>
+      <span>Код кімнати</span>
+      <span id="room-code">····</span>
+      <button id="btn-copy">Копіювати посилання</button>
+      <span id="peer-info"></span>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay" hidden>
+    <div class="card">
+      <h1 id="gameover-title">Кулька впала 😢</h1>
+      <p class="sub" id="basket-result" hidden></p>
+      <p class="sub" id="classic-result">Рівень <b id="final-level">1</b> · Рахунок: <b id="final-score">0</b> · Рекорд: <b id="best-score">0</b><br />
+        Зароблено 🪙 <b id="earned">0</b> — витрать їх у магазині на нові кульки й перчатки</p>
+      <p class="sub" id="hc-earned" hidden>☠ <b id="earned-skulls">0</b> за пройдені хардкор-рівні —
+        на них купуються персонажі</p>
+      <p class="sub" id="team-earned" hidden>Найдовша серія: <b id="best-combo">0</b> пасів ·
+        🤝 <b id="earned-tokens">0</b> жетонів — на них купуються командні переваги</p>
+      <div class="stack">
+        <button id="btn-again">Ще раз (Пробіл)</button>
+        <button id="btn-menu2" class="ghost" onclick="document.getElementById('btn-menu').click()">У меню</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="achievement-toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
