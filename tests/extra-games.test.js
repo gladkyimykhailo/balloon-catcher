@@ -8,7 +8,7 @@ const tick = (s, seconds, input = {}) => { for (let i = 0; i < Math.ceil(seconds
 
 test('ten independent mechanics initialize and remain finite on all levels', () => {
   assert.equal(Object.keys(EXTRA_GAMES).length, 10);
-  for (const kind of Object.keys(EXTRA_GAMES)) for (let level = 1; level <= 20; level++) {
+  for (const kind of Object.keys(EXTRA_GAMES)) for (let level = 1; level <= 40; level++) {
     const s = createArcade(kind, level, seeded()); tick(s, 3);
     assert.equal(s.kind, kind);
     assert.doesNotMatch(JSON.stringify(s), /null/);
@@ -24,6 +24,71 @@ test('fighter respects range, cooldowns, blocking and energy cost', () => {
   a.cooldown = 0; b.block = true; fighterAttack(s, 0, 'kick'); assert.equal(b.hp, 88);
   a.cooldown = 0; a.energy = 39; fighterAttack(s, 0, 'special'); assert.equal(s.projectiles.length, 0);
   a.energy = 40; fighterAttack(s, 0, 'special'); assert.equal(a.energy, 0); assert.equal(s.projectiles.length, 1);
+});
+
+test('falling melee hits crit for either fighter; grounded, rising and blocked hits do not', () => {
+  for (const who of [0, 1]) for (const type of ['punch', 'kick']) {
+    for (const [y, vy, block, critical] of [[390, 200, false, true], [390, -200, false, false], [390, 0, false, false], [430, 0, false, false], [390, 200, true, false]]) {
+      const s = createArcade('fighter'), attacker = s.fighters[who], target = s.fighters[1 - who];
+      attacker.x = 400; target.x = 460; attacker.y = y; attacker.vy = vy; target.block = block;
+      fighterAttack(s, who, type);
+      const base = type === 'kick' ? 15 : 9, damage = block ? Math.ceil(base * .2) : critical ? Math.round(base * 1.5) : base;
+      assert.equal(target.hp, 100 - damage);
+      assert.equal(s.impacts[0].critical, critical);
+      assert.equal(s.impacts[0].damage, damage);
+      fighterAttack(s, who, type); assert.equal(target.hp, 100 - damage, 'cooldown prevents repeat damage');
+    }
+  }
+});
+
+test('critical feedback lasts longer and expires; ranged attacks do not crit', () => {
+  const s = createArcade('fighter'); s.botThink = 10;
+  Object.assign(s.fighters[0], { x: 400, y: 390, vy: 200 }); s.fighters[1].x = 460;
+  fighterAttack(s, 0, 'punch');
+  tick(s, .5); assert.equal(s.impacts.length, 1);
+  tick(s, .25); assert.equal(s.impacts.length, 0);
+  const ranged = createArcade('fighter'); ranged.botThink = 10;
+  Object.assign(ranged.fighters[0], { x: 400, y: 410, vy: 200 }); ranged.fighters[1].x = 450;
+  fighterAttack(ranged, 0, 'special'); updateArcade(ranged, .01);
+  assert.equal(ranged.fighters[1].hp, 78); assert.equal(ranged.impacts[0].critical, false);
+});
+
+test('bot telegraphs attacks and a hit interrupts its windup', () => {
+  const s = createArcade('fighter');
+  s.fighters[1].x = s.fighters[0].x + 70; s.botThink = 0;
+  updateArcade(s, .02, {}, () => .9);
+  assert.equal(s.fighters[0].hp, 100);
+  assert.equal(s.botAttack.type, 'punch');
+  tick(s, .5);
+  assert.ok(s.fighters[0].hp < 100);
+  const interrupted = createArcade('fighter');
+  interrupted.fighters[1].x = interrupted.fighters[0].x + 70; interrupted.botThink = 0;
+  updateArcade(interrupted, .02, {}, () => .9);
+  fighterAttack(interrupted, 0, 'punch');
+  assert.equal(interrupted.botAttack, false);
+  assert.equal(interrupted.impacts[0].damage, 9);
+  assert.equal(interrupted.impacts[0].blocked, false);
+});
+
+test('blocked hits do not build combos and impact effects expire', () => {
+  const s = createArcade('fighter'); s.botThink = 10;
+  s.fighters[1].x = s.fighters[0].x + 70; s.fighters[1].block = true;
+  fighterAttack(s, 0, 'punch');
+  assert.equal(s.combo, 0); assert.equal(s.impacts[0].blocked, true);
+  assert.equal(s.impacts[0].damage, 2);
+  tick(s, .5); assert.equal(s.impacts.length, 0);
+});
+
+test('campaign opponents change tactics without speeding up player controls', () => {
+  assert.deepEqual([1, 6, 11].map(level => createArcade('fighter', level).botStyle), ['Штурмовик', 'Вартовий', 'Маг']);
+  for (const level of [1, 10, 20, 30, 40]) {
+    const s = createArcade('fighter', level);
+    updateArcade(s, .04, { dx: 1 });
+    assert.equal(s.fighters[0].x, 270.2);
+  }
+  const mage = createArcade('fighter', 11); mage.fighters[1].x = 400;
+  updateArcade(mage, .04);
+  assert.ok(mage.fighters[1].x > 400);
 });
 
 test('fighter projectiles can hit, be blocked and be jumped over', () => {
@@ -48,7 +113,7 @@ test('fighter requires two round victories, resets health, and freezes on match 
 });
 
 test('every Sokoban board has a solution using legal pushes; undo restores state', () => {
-  for (let level = 1; level <= 20; level++) {
+  for (let level = 1; level <= 40; level++) {
     const s = createArcade('sokoban', level), encode = (p, boxes) => `${p}:${[...boxes].sort((a,b)=>a-b)}`;
     const queue = [{ p: s.player, boxes: s.boxes, path: [] }], visited = new Set([encode(s.player, s.boxes)]); let solution;
     for (let head = 0; head < queue.length && head < 200000; head++) {
@@ -73,7 +138,7 @@ test('every Sokoban board has a solution using legal pushes; undo restores state
 });
 
 test('mines first reveal is safe, flags protect cells, all safe cells win, mines lose', () => {
-  for (let level = 1; level <= 20; level++) {
+  for (let level = 1; level <= 40; level++) {
     const s = createArcade('mines', level, seeded());
     extraCommand(s, 'flag'); click(s, 0); extraCommand(s, 'flag'); click(s, 0); assert.equal(s.armed, false);
     extraCommand(s, 'flag'); click(s, 0); extraCommand(s, 'flag'); click(s, 0);
@@ -84,7 +149,7 @@ test('mines first reveal is safe, flags protect cells, all safe cells win, mines
 });
 
 test('sliding puzzles are solvable and reject nonadjacent moves', () => {
-  for (let level = 1; level <= 20; level++) for (let seed = 1; seed <= 10; seed++) {
+  for (let level = 1; level <= 40; level++) for (let seed = 1; seed <= 10; seed++) {
     const s = createArcade('sliding', level, seeded(seed)), tiles = s.board.filter(Boolean);
     let inversions = 0; tiles.forEach((a, i) => tiles.slice(i + 1).forEach(b => { if (a > b) inversions++; }));
     const rowFromBottom = 4 - Math.floor(s.board.indexOf(0) / 4);
@@ -95,7 +160,7 @@ test('sliding puzzles are solvable and reject nonadjacent moves', () => {
 });
 
 test('lights puzzles generated from legal moves are solvable using binary elimination', () => {
-  for (let level = 1; level <= 20; level++) {
+  for (let level = 1; level <= 40; level++) {
     const s = createArcade('lights', level, seeded()), n = s.board.length;
     const rows = Array.from({length:n}, (_, i) => Array.from({length:n + 1}, (_, j) => j === n ? s.board[i] : Number(i === j || Math.abs(i % s.n - j % s.n) + Math.abs(Math.floor(i / s.n) - Math.floor(j / s.n)) === 1)));
     const pivots = []; let row = 0;
@@ -122,7 +187,7 @@ test('connect four detects diagonals and bot takes winning and blocking moves', 
 test('stack trims overhang, loses on a miss, and wins at target height', () => {
   const s = createArcade('stack'); s.block.x = 350; arcadeAction(s); assert.equal(s.tower.at(-1).w, 250);
   s.block.x = 0; arcadeAction(s); assert.equal(s.over, true); assert.equal(s.won, false);
-  for (let level = 1; level <= 20; level++) {
+  for (let level = 1; level <= 40; level++) {
     const win = createArcade('stack', level);
     while (!win.over) { win.block.x = win.tower.at(-1).x; arcadeAction(win); }
     assert.equal(win.won, true); assert.equal(win.score, win.target);

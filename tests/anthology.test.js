@@ -26,9 +26,9 @@ test('catalog has exactly 1,000 stable, uniquely named combinations with real ru
   assert.equal(selectCatalog(ARCADE_GAMES, { query: 'неіснуючагра' }).length, 0);
 });
 
-test('all 20,000 levels can be won through their public input and update paths', () => {
+test('all 40,000 levels can be won through their public input and update paths', () => {
   const failures = [];
-  for (const key of Object.keys(ANTHOLOGY_GAMES)) for (let level = 1; level <= 20; level++) for (const seed of [0.01, 0.42, 0.99]) {
+  for (const key of Object.keys(ANTHOLOGY_GAMES)) for (let level = 1; level <= 40; level++) for (const seed of [0.01, 0.42, 0.99]) {
     const s = createArcade(key, level, () => seed);
     let frames = 0;
     while (!s.over && frames++ < 7500) {
@@ -50,7 +50,7 @@ test('all 20,000 levels can be won through their public input and update paths',
 });
 
 test('puzzle options are distinct, clicks outside choices do nothing, memory cannot be answered early', () => {
-  for (const m of MECHANICS.filter(m => ['logic', 'attention', 'memory'].includes(m.category))) for (let rule = 0; rule < 5; rule++) for (const level of [1, 10, 20]) {
+  for (const m of MECHANICS.filter(m => ['logic', 'attention', 'memory'].includes(m.category))) for (let rule = 0; rule < 5; rule++) for (const level of [1, 10, 20, 30, 40]) {
     const s = createArcade(id(m.id, rule), level, () => 0.42);
     if (m.category === 'memory') assert.ok(s.stage.preview > 0, `${m.id}/${level} must show a preview`);
     if (!s.stage.choices) continue;

@@ -6,18 +6,18 @@ function seeded(seed=17){return ()=>{seed=(seed*1664525+1013904223)>>>0;return s
 
 test('all 1023 games have twenty finite, independent playable level states',()=>{
   assert.equal(Object.keys(ARCADE_GAMES).length,1023);
-  for(const kind of Object.keys(ARCADE_GAMES))for(let level=1;level<=20;level++){
+  for(const kind of Object.keys(ARCADE_GAMES))for(let level=1;level<=40;level++){
     const s=createArcade(kind,level,seeded());
     tick(s,180,{dx:1,action:kind==='shooter'},seeded());
     for(const [key,value] of Object.entries(s))if(typeof value==='number')assert.ok(Number.isFinite(value),`${kind}/${level}/${key}`);
     const fresh=createArcade(kind,level,seeded());assert.ok(fresh.score>=0 && fresh.score<fresh.target);assert.equal(fresh.over,false);
     assert.equal(fresh.level,level);
   }
-  assert.equal(createArcade('pong',Infinity).level,20);
+  assert.equal(createArcade('pong',Infinity).level,40);
   assert.throws(()=>createArcade('missing'));
 });
 test('memory: mismatches close, duplicate taps do not count, every level can be completed',()=>{
-  for(let level=1;level<=20;level++){
+  for(let level=1;level<=40;level++){
     const s=createArcade('memory',level,seeded());
     const click=i=>{const r=cardRect(s,i);arcadeAction(s,r.x+5,r.y+5);};
     const first=0,other=s.cards.findIndex(c=>c.value!==s.cards[0].value);
@@ -34,7 +34,7 @@ test('snake turns, eats, grows, rejects reversal and loses against a wall',()=>{
   tick(s,200);assert.equal(s.over,true);assert.equal(s.won,false);
 });
 test('every generated maze has reachable keys and exit and can be won using movement',()=>{
-  for(let level=1;level<=20;level++){
+  for(let level=1;level<=40;level++){
     const s=createArcade('maze',level,seeded(level));
     for(const goal of [...s.keys,s.exit]){
       const queue=[{...s.cell,path:[]}],seen=new Set([`${s.cell.x},${s.cell.y}`]);let path;
@@ -99,7 +99,7 @@ test('reduced catalog keeps every mechanic and base game and removes retired var
 });
 
 test('target is winnable at all twenty levels and freezes on victory', () => {
-  for (let level = 1; level <= 20; level++) {
+  for (let level = 1; level <= 40; level++) {
     const s = createArcade('target', level, seeded());
     for (let hit = 0; hit < s.target; hit++) arcadeAction(s, s.mark.x, s.mark.y, seeded());
     assert.equal(s.won, true, `target/${level}`);

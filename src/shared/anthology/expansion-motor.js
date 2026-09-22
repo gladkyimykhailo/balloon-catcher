@@ -23,7 +23,8 @@ export function expansionMotorGeometry(s) {
   if (s.mechanic === 'crossing') {
     const wave = Math.sin(phase), x = 450 + wave * 240, y = r === 2 ? 250 + Math.sin(phase * 2) * 65 : r === 3 ? 250 + wave * 110 : 250;
     const otherX = r === 1 ? 450 : 450 - wave * 240, otherY = r === 1 ? 250 + wave * 140 : 500 - y;
-    const tolerance = r === 4 ? 20 : 45;
+    // Keep the crossing window wider than one 40 ms simulation step.
+    const tolerance = r === 4 ? Math.max(20, 480 * (1.3 + s.level * 0.08) * 0.025) : 45;
     return { x, y, otherX, otherY, tolerance, active: Math.hypot(x - otherX, y - otherY) < tolerance, expired };
   }
   if (s.mechanic === 'aperture') {

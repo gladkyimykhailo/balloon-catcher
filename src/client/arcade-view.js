@@ -1,7 +1,8 @@
 import { EXTRA_GAMES } from '../shared/extra-games.js';
 import { drawExtra } from './extra-games-view.js';
 import { drawDiscovery } from './anthology/view.js';
-import { cardRect, holePoint } from '../shared/arcade.js';
+import { cardRect } from '../shared/arcade.js';
+import { drawMoleGarden } from './mole-view.js';
 const PALETTES=[['#102f30','#236454','#8ce7bd'],['#102c4b','#23587b','#7ad9ff'],['#292145','#643f65','#ffb59e'],['#131b3d','#303b75','#b7a5ff'],['#392439','#783d4d','#ffcd76']];
 const SYMBOLS=['☀','☾','★','♥','♣','♦','♫','✿'];
 export function drawArcade(c,s,overlay='') {
@@ -41,10 +42,7 @@ export function drawArcade(c,s,overlay='') {
     c.strokeStyle=accent;c.lineWidth=2;c.stroke();
     text(shown?SYMBOLS[card.value]:'?',r.x+r.w/2,r.y+r.h/2,38,shown?'#28334d':accent);
   }
-  if(s.kind==='mole')for(let i=0;i<9;i++) {
-    const p=holePoint(i),h=s.holes[i];c.fillStyle='#091e2d';c.beginPath();c.ellipse(p.x,p.y+26,59,23,0,0,Math.PI*2);c.fill();
-    if(h.time>0){circle(p.x,p.y,42,h.bad?'#ee6679':'#cb9e79');circle(p.x-13,p.y-8,5,'#162335');circle(p.x+13,p.y-8,5,'#162335');circle(p.x,p.y+10,8,'#855a62');if(h.bad)text('!',p.x,p.y-28,24);}
-  }
+  if(s.kind==='mole')drawMoleGarden(c,s);
   if(s.kind==='target') {
     circle(s.mark.x,s.mark.y,s.mark.r,'#fff0d4');circle(s.mark.x,s.mark.y,s.mark.r*.7,'#ef687a');circle(s.mark.x,s.mark.y,s.mark.r*.35,'#fff0d4');
     c.strokeStyle=accent;c.lineWidth=2;c.beginPath();c.arc(s.x,s.y,15,0,Math.PI*2);c.moveTo(s.x-24,s.y);c.lineTo(s.x+24,s.y);c.moveTo(s.x,s.y-24);c.lineTo(s.x,s.y+24);c.stroke();

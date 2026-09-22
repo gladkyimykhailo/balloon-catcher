@@ -113,7 +113,7 @@ export function motorGeometry(s) {
     y = 90 + t * (75 + s.level * 9);
     return { x, y, radius, active: Math.abs(s.x - x) < radius + 15 && Math.abs(y - 445) < 35, expired: y > 490 };
   }
-  if (s.mechanic === 'sorting') return { x: 110 + t * (55 + s.level * 4), y, expired: t > 9 - s.level * 0.3 };
+  if (s.mechanic === 'sorting') return { x: 110 + t * (55 + s.level * 4), y, expired: t > Math.max(3, 9 - s.level * 0.3) };
   if (s.mechanic === 'aim' || s.mechanic === 'tracker') {
     if (r === 0 || r === 4) { x = 450 + Math.sin(t * speed + offset) * 290; y = 230; }
     if (r === 1) { x = 450; y = 250 + Math.sin(t * speed + offset) * 135; }

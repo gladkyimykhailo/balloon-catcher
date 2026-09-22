@@ -62,7 +62,7 @@ export function createArcade(kind, level=1, rng=Math.random) {
   if(kind==='maze') makeMaze(s,rng);
   if(Object.hasOwn(EXTRA_GAMES,kind)) initExtra(s,rng);
   s.gameId=gameId;
-  s.speed=(rules.speed ?? 1)*(1+Math.max(0,campaignLevel-5)*0.04);
+  s.speed=(rules.speed ?? 1)*(kind==='fighter'?1:1+Math.max(0,campaignLevel-5)*0.04);
   if(rules.base) {
     s.lives=rules.lives;
     if(s.limit) s.limit*=rules.distance;

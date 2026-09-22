@@ -112,7 +112,7 @@ test('arcade achievements track each game independently and persist rewards', ()
   const { tracker, storage, earned } = setup();
   tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: 1, won: false });
   tracker.arcadeFinish({ kind: 'missing', level: 5, won: true });
-  tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: 21, won: true });
+  tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: 41, won: true });
   assert.equal(earned.length, 0);
   for (let i = 0; i < 10; i++) tracker.arcadeFinish({ kind: 'discovery-arithmetic-0-expedition', level: i === 9 ? 5 : 1, won: true });
   assert.deepEqual(earned, ['arcade-discovery-arithmetic-0-expedition-first', 'arcade-discovery-arithmetic-0-expedition-ten', 'arcade-discovery-arithmetic-0-expedition-master']);

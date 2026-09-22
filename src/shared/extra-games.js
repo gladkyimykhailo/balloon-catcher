@@ -2,7 +2,7 @@ import { PUZZLE_GAMES, initPuzzle, puzzleDirection, puzzleAction, updatePuzzle, 
 // Independent game rules. Coordinates use the arcade's 900 × 550 canvas.
 export const EXTRA_GAMES = {
   ...PUZZLE_GAMES,
-  fighter: { name: '🥋 Тіньовий двобій', help: 'Переможи бота у двох раундах. ← → / A D — рух, пробіл / ↑ / W — стрибок, утримуй Shift / ↓ / S — блок. J — кулак, K — нога, L — енергетична атака (40 енергії). Є кнопки для дотику.' },
+  fighter: { name: '🥋 Тіньовий двобій', help: 'Переможи бота у двох раундах. ← → / A D — рух, пробіл / ↑ / W — стрибок, утримуй Shift / ↓ / S — блок. J — кулак, K — нога, L — енергетична атака (40 енергії). Кулак або нога у падінні після стрибка — крит ×1,5 зі зірочками; блок скасовує бонус. Попередження над ботом підказує наступний удар — блокуй або відстрибуй. Є кнопки для дотику.' },
   sokoban: { name: '📦 Сокобан', help: 'Стрілками або WASD штовхай ящики на золоті місця. Тягнути ящики не можна. Z або «Скасувати» повертає хід.' },
   mines: { name: '💣 Сапер', help: 'Відкрий усі безпечні клітинки. Число показує міни поруч. F або «Прапорець» перемикає режим прапорців; також працює права кнопка миші. Перше відкриття безпечне.' },
   sliding: { name: '🔢 П’ятнашки', help: 'Розташуй числа від 1 до 15, порожню клітинку — внизу праворуч. Натискай плитку поряд із порожнім місцем або рухай порожнє місце стрілками.' },
@@ -87,13 +87,20 @@ function neighbors(i, n, diagonal = false) {
 function resetFighters(s) {
   s.fighters = [260, 640].map(x => ({ x, y: 430, vy: 0, hp: 100, energy: 40, cooldown: 0, pose: '', poseTime: 0, block: false, stun: 0 }));
   s.projectiles = []; s.roundTime = 60; s.botThink = 0.8; s.combo = 0; s.lastHit = -10;
+  s.impacts = []; s.botAttack = false;
+  s.botStyle = ['Штурмовик', 'Вартовий', 'Маг'][Math.floor((s.level - 1) / 5) % 3];
 }
-function hitFighter(s, target, damage, direction) {
+function hitFighter(s, target, damage, direction, critical = false) {
   const f = s.fighters[target];
-  f.hp = Math.max(0, f.hp - (f.block ? Math.ceil(damage * 0.2) : damage));
+  critical = critical && !f.block;
+  if (critical) damage = Math.round(damage * 1.5);
+  const dealt = f.block ? Math.ceil(damage * 0.2) : damage;
+  f.hp = Math.max(0, f.hp - dealt);
+  s.impacts.push({ x: f.x, y: f.y - 65, damage: dealt, blocked: f.block, critical, life: critical ? 0.7 : 0.45 });
+  if (target === 1) s.botAttack = false;
   f.stun = f.block ? 0.06 : 0.18; f.x = clamp(f.x + direction * (f.block ? 5 : 16), 55, 845);
   if (!target) s.combo = 0;
-  else { s.combo = s.time - s.lastHit < 1.2 ? s.combo + 1 : 1; s.lastHit = s.time; }
+  else if (!f.block) { s.combo = s.time - s.lastHit < 1.2 ? s.combo + 1 : 1; s.lastHit = s.time; }
 }
 export function fighterAttack(s, who, type) {
   if (s.over || s.roundPause > 0 || ![0, 1].includes(who) || !['punch', 'kick', 'special'].includes(type)) return;
@@ -107,7 +114,7 @@ export function fighterAttack(s, who, type) {
   } else {
     const kick = type === 'kick'; f.cooldown = kick ? 0.58 : 0.32;
     if (Math.abs(f.x - other.x) < (kick ? 115 : 85) && Math.abs(f.y - other.y) < 65) {
-      hitFighter(s, 1 - who, kick ? 15 : 9, direction); f.energy = Math.min(100, f.energy + 8);
+      hitFighter(s, 1 - who, kick ? 15 : 9, direction, f.y < 430 && f.vy > 0); f.energy = Math.min(100, f.energy + 8);
     }
   }
   f.pose = type; f.poseTime = 0.2;
@@ -220,6 +227,7 @@ export function updateExtra(s, dt, input, rng) {
   }
 }
 function updateFighter(s, dt, input, rng) {
+  s.impacts = s.impacts.filter(hit => (hit.life -= dt) > 0);
   if (s.roundPause > 0) { s.roundPause -= dt; if (s.roundPause <= 0) { s.round++; resetFighters(s); s.message = 'БІЙ!'; } return; }
   const [human, bot] = s.fighters;
   for (const f of s.fighters) {
@@ -241,16 +249,29 @@ function updateFighter(s, dt, input, rng) {
     if (control.special) fighterAttack(s, i, 'special');
   });
   if (!s.multiplayer) {
-  const difficulty = s.difficulty ?? Math.min(s.level, 5);
+  const difficulty = Math.min(7, (s.difficulty ?? Math.min(s.level, 5)) + Math.max(0, s.level - 5) / 12.5);
   const distance = Math.abs(bot.x - human.x), direction = Math.sign(human.x - bot.x) || -1;
+  const mage = s.botStyle === 'Маг', guard = s.botStyle === 'Вартовий';
   s.botThink -= dt;
-  if (s.botThink <= 0) {
+  if (s.botAttack) {
+    s.botAttack.remaining -= dt;
+    if (s.botAttack.remaining <= 0) {
+      const type = s.botAttack.type; s.botAttack = false; fighterAttack(s, 1, type);
+    }
+  } else if (s.botThink <= 0) {
     s.botThink = 0.65 - difficulty * 0.065 + rng() * 0.3;
-    bot.block = distance < 145 && rng() < 0.15 + difficulty * 0.055;
-    if (!bot.block) fighterAttack(s, 1, distance > 160 ? 'special' : rng() < 0.5 ? 'kick' : 'punch');
-    if (difficulty >= 3 && rng() < 0.18 && bot.y === 430) bot.vy = -570;
+    const incoming = s.projectiles.some(p => p.owner === 0 && Math.abs(p.x - bot.x) < 240 && (bot.x - p.x) * p.vx > 0);
+    bot.block = bot.y === 430 && bot.stun <= 0 && (distance < 145 || incoming) && rng() < (guard ? 0.35 : 0.15) + difficulty * 0.04;
+    const type = distance > 160 ? 'special' : rng() < 0.5 ? 'kick' : 'punch';
+    if (!bot.block && bot.stun <= 0 && bot.cooldown <= 0 && (type !== 'special' || bot.energy >= 40)) {
+      s.botAttack = { type, remaining: Math.max(0.22, 0.48 - difficulty * 0.03) };
+    }
+    if (!bot.block && bot.stun <= 0 && difficulty >= 3 && rng() < (incoming ? 0.65 : 0.18) && bot.y === 430) bot.vy = -570;
   }
-  if (distance > 80 && !bot.block && bot.stun <= 0) bot.x = clamp(bot.x + direction * (100 + difficulty * 18) * dt, 55, 845);
+  if (!bot.block && bot.stun <= 0 && !s.botAttack) {
+    const move = mage && bot.energy >= 30 && distance < 220 ? -1 : distance > (mage && bot.energy >= 30 ? 290 : 80) ? 1 : 0;
+    bot.x = clamp(bot.x + direction * move * (100 + difficulty * 18) * dt, 55, 845);
+  }
   }
   if (Math.abs(human.x - bot.x) < 52 && Math.abs(human.y - bot.y) < 60) {
     const push = (52 - Math.abs(human.x - bot.x)) / 2, sign = Math.sign(bot.x - human.x) || 1;
